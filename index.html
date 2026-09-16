@@ -179,7 +179,9 @@
 <div class="card">
   <ol>
     <li>Go to any image-heavy page — a category or product listing works best.</li>
-    <li>Scroll down so the lazy-loaded images actually load. The bookmarklet only sees images already in the DOM.</li>
+    <li>Scroll down a little if the page uses a script-driven lazy loader that swaps a
+      <code>data:</code> placeholder for the real image — the bookmarklet only sees images already
+      in the DOM. Native <code>loading="lazy"</code> images are forced to load for you.</li>
     <li>Click the <strong>⬇ Cloudinary Savings</strong> bookmark.</li>
     <li>Each measured image gets a bright green badge with its saving. Badges scale to the image — small nav thumbnails get a compact percentage-only badge so they stay readable.</li>
     <li>Hit <strong>Diagnostics</strong> in the panel if anything looks wrong: it reports CSP violations, helper reachability and per-domain failure reasons.</li>
@@ -381,6 +383,26 @@ async function cloudinarySavings() {
     csp.push({ directive: e.violatedDirective, uri: String(e.blockedURI || "").slice(0, 140) });
   };
   document.addEventListener("securitypolicyviolation", onCsp);
+
+  // ---- Load what the browser hasn't ----------------------------------------
+  // Images marked loading="lazy" below the fold have a src but have never been fetched, so
+  // Resource Timing knows nothing about them and we'd fall back to measuring them remotely.
+  // Forcing them to load is both more honest (they're what the page actually serves) and
+  // strictly better measurement: a fetched image gets a Resource Timing entry, which on a
+  // same-origin or Timing-Allow-Origin host is the real byte count this browser received.
+  performance.setResourceTimingBufferSize?.(1000);
+  const lazyPending = Array.from(document.images)
+    .filter(i => !i.complete && i.loading === "lazy" && /^https?:/i.test(i.currentSrc || i.src));
+  let forcedLoads = 0;
+  if (lazyPending.length) {
+    forcedLoads = lazyPending.length;
+    lazyPending.forEach(i => { try { i.loading = "eager"; } catch (e) {} });
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (lazyPending.every(i => i.complete)) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
 
   // ---- Survey the page ------------------------------------------------------
   const byUrl = new Map();     // url -> { url, host, w, h, natW, natH, els: [] }
@@ -953,6 +975,13 @@ async function cloudinarySavings() {
           ? 'This is the current published build.'
           : 'Checking against the published build&hellip;');
 
+    if (forcedLoads) {
+      h += '<b>Lazy images</b>';
+      h += '<span class="ok">' + forcedLoads + ' image' + (forcedLoads === 1 ? " was" : "s were") +
+        ' marked loading="lazy" and had never been fetched. They were loaded before measuring, ' +
+        'so their sizes come from this browser wherever the host allows it.</span>';
+    }
+
     h += '<b>Helper</b>';
     h += helperFailed ? '<span class="bad">' + helperFailed + '</span>'
       : helperReady ? '<span class="ok">reachable &mdash; measuring runs in an iframe on ' + HELPER_ORIGIN + '</span>'
@@ -1073,6 +1102,11 @@ async function cloudinarySavings() {
           : d.big + " over " + THUMB + "px of " + d.total));
     });
     L.push("");
+    if (forcedLoads) {
+      L.push("LAZY IMAGES");
+      L.push("  " + forcedLoads + " forced to load before measuring");
+      L.push("");
+    }
     L.push("HELPER");
     L.push("  " + (helperFailed || (helperReady ? "reachable — " + HELPER_ORIGIN : "not contacted")));
     L.push("");

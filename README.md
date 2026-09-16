@@ -33,6 +33,17 @@ Three paths, best first. Diagnostics report which one each domain used.
    browser downloaded for its own `<img>` request — better than anything we can synthesise. It
    covers sites serving imagery from their own origin, which is also the common case for hosts
    that refuse CORS.
+
+   To widen this path, images marked `loading="lazy"` that the browser has never fetched are
+   forced to load first (45 of them in ~600ms on jackjones). Otherwise they'd have no Resource
+   Timing entry at all and would fall through to a remote measurement — and we'd be reporting
+   bytes the visitor had not actually downloaded. Script-driven lazy loaders that swap a `data:`
+   placeholder still need a scroll; `data:` sources are ignored, which is why a page can report
+   far fewer images than `document.images` suggests (24 of banyantree's 29 are placeholders).
+
+   Where the browser refuses, it refuses absolutely: on `images.jackjones.com` the Resource
+   Timing entries exist with timings but every size field reads 0, because the host sends no
+   `Timing-Allow-Origin`. That is the same-origin policy, not a gap in the tool.
 2. **Cross-origin fetch from the helper**, with the browser's own `Accept` header.
 3. **Cloudinary, server-side.** `fl_getinfo` on the fetch URL returns `input.bytes` (what
    Cloudinary pulled) and `output.bytes` (what it would serve, honouring our `Accept`). CORS
