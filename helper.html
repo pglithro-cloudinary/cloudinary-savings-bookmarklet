@@ -5,24 +5,25 @@
 <title>Measurement helper</title>
 </head>
 <body>
-<p style="font:13px system-ui;color:#555;padding:12px">
-Measurement helper for the Cloudinary savings bookmarklet. This page is meant to be embedded
-in a hidden iframe; it performs the size comparisons that the host page's Content-Security-Policy
+<p style="font:13px system-ui;color:#555;padding:12px;max-width:60ch">
+Measurement helper for the Scene7 &rarr; Cloudinary savings bookmarklet. This page is meant to be
+embedded in a hidden iframe. It verifies that a host really is an Adobe Scene7 / Dynamic Media
+image server, then performs the size comparisons that the host page's Content-Security-Policy
 blocks, and posts the results back to whoever framed it.
 </p>
 <script>
 (function () {
-  // Only ever measure these. Keeps the helper from being used as a general-purpose
-  // cross-origin measurement proxy by anyone who happens to frame it.
-  var ALLOWED_SOURCE_HOSTS = ["asda.scene7.com"];
   var CLOUDINARY_HOST = "res.cloudinary.com";
   var CONCURRENCY = 8;
+  var DEFAULT_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
-  function allowed(u) {
-    try {
-      var h = new URL(u).host;
-      return ALLOWED_SOURCE_HOSTS.indexOf(h) !== -1;
-    } catch (e) { return false; }
+  // Hosts confirmed as Scene7 during this session. Measurement is restricted to these,
+  // so framing the helper doesn't turn it into a general-purpose measurement proxy.
+  var confirmedHosts = Object.create(null);
+
+  function baseOf(url) {
+    var u = new URL(url);
+    return u.origin + u.pathname;
   }
 
   async function sizeOf(url, accept) {
@@ -40,41 +41,96 @@ blocks, and posts the results back to whoever framed it.
     }
   }
 
+  // Two independent proofs that a host is really running Scene7 Image Serving.
+  async function verify(sampleUrl) {
+    var base;
+    try { base = baseOf(sampleUrl); } catch (e) { return { confirmed: false, error: "bad url" }; }
+
+    // 1. The Image Serving command API. Scene7 answers every req= command with an
+    //    "#S7Z OK" header block in text/plain, and sends access-control-allow-origin: *,
+    //    so it is readable cross-origin. This holds even for an asset that doesn't exist.
+    try {
+      var r = await fetch(base + "?req=exists", { cache: "no-store" });
+      if (r.ok) {
+        var body = (await r.text()).slice(0, 300);
+        if (body.indexOf("#S7Z") !== -1) {
+          return {
+            confirmed: true,
+            method: "req=exists returned the #S7Z Image Serving signature",
+            exists: /catalogRecord\.exists=1/.test(body)
+          };
+        }
+      }
+    } catch (e) { /* fall through to the resize probe */ }
+
+    // 2. Fallback for deployments that block req= commands: does the host actually
+    //    honour Scene7's wid= resizing? A static CDN returns the same bytes either way.
+    try {
+      var pair = await Promise.all([
+        sizeOf(base + "?wid=20", DEFAULT_ACCEPT),
+        sizeOf(base + "?wid=600", DEFAULT_ACCEPT)
+      ]);
+      if (pair[0].bytes && pair[1].bytes && pair[1].bytes > pair[0].bytes * 1.5) {
+        return {
+          confirmed: true,
+          method: "honours Scene7 wid= resizing (" + pair[0].bytes + "b at wid=20 vs " +
+                  pair[1].bytes + "b at wid=600)"
+        };
+      }
+      return { confirmed: false, error: "no #S7Z signature and wid= had no effect" };
+    } catch (e) {
+      return { confirmed: false, error: String(e.message || e).slice(0, 80) };
+    }
+  }
+
   async function pool(items, n, fn) {
     var out = new Array(items.length), i = 0;
-    var workers = new Array(Math.min(n, items.length)).fill(0).map(async function () {
+    await Promise.all(new Array(Math.min(n, items.length)).fill(0).map(async function () {
       while (i < items.length) { var k = i++; out[k] = await fn(items[k], k); }
-    });
-    await Promise.all(workers);
+    }));
     return out;
   }
 
   window.addEventListener("message", async function (ev) {
     var msg = ev.data;
-    if (!msg || msg.type !== "cld-measure" || !Array.isArray(msg.urls)) return;
+    if (!msg || !ev.source) return;
 
-    var accept = typeof msg.accept === "string" ? msg.accept
-      : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
-    var prefix = typeof msg.prefix === "string" && msg.prefix.indexOf("https://" + CLOUDINARY_HOST + "/") === 0
-      ? msg.prefix : null;
+    if (msg.type === "cld-verify" && Array.isArray(msg.candidates)) {
+      var verdicts = await pool(msg.candidates.slice(0, 20), 4, async function (c) {
+        if (!c || typeof c.sample !== "string") return { host: c && c.host, confirmed: false, error: "bad candidate" };
+        var v = await verify(c.sample);
+        if (v.confirmed) confirmedHosts[c.host] = true;
+        v.host = c.host;
+        return v;
+      });
+      ev.source.postMessage({ type: "cld-verified", id: msg.id, results: verdicts }, ev.origin);
+      return;
+    }
 
-    var results = await pool(msg.urls.slice(0, 300), CONCURRENCY, async function (url) {
-      if (!allowed(url)) return { url: url, error: "host not allowed" };
-      var cldUrl = prefix ? prefix + encodeURIComponent(url) : null;
-      // Same Accept header on both sides, so we compare like with like.
-      var pair = await Promise.all([
-        sizeOf(url, accept),
-        cldUrl ? sizeOf(cldUrl, accept) : Promise.resolve({ bytes: null, error: "no prefix" })
-      ]);
-      return {
-        url: url,
-        cldUrl: cldUrl,
-        orig: pair[0].bytes, origType: pair[0].type, origError: pair[0].error,
-        cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error
-      };
-    });
+    if (msg.type === "cld-measure" && Array.isArray(msg.urls)) {
+      var accept = typeof msg.accept === "string" ? msg.accept : DEFAULT_ACCEPT;
+      var prefix = typeof msg.prefix === "string" &&
+        msg.prefix.indexOf("https://" + CLOUDINARY_HOST + "/") === 0 ? msg.prefix : null;
 
-    ev.source.postMessage({ type: "cld-results", id: msg.id, results: results }, ev.origin);
+      var results = await pool(msg.urls.slice(0, 300), CONCURRENCY, async function (url) {
+        var host;
+        try { host = new URL(url).host; } catch (e) { return { url: url, error: "bad url" }; }
+        if (!confirmedHosts[host]) return { url: url, error: "host not verified as Scene7" };
+
+        var cldUrl = prefix ? prefix + encodeURIComponent(url) : null;
+        // Same Accept header on both sides, so we compare like with like.
+        var pair = await Promise.all([
+          sizeOf(url, accept),
+          cldUrl ? sizeOf(cldUrl, accept) : Promise.resolve({ bytes: null, error: "no prefix" })
+        ]);
+        return {
+          url: url, cldUrl: cldUrl,
+          orig: pair[0].bytes, origType: pair[0].type, origError: pair[0].error,
+          cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error
+        };
+      });
+      ev.source.postMessage({ type: "cld-results", id: msg.id, results: results }, ev.origin);
+    }
   });
 
   if (window.parent !== window) {
