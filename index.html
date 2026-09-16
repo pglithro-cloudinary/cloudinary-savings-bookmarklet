@@ -320,6 +320,11 @@
 <script>
 // ---- The bookmarklet payload. Edited to make the savings loud and green. ----
 async function cloudinarySavings() {
+  // Clicking the bookmarklet twice, or re-scanning after navigation, must not stack instances.
+  if (typeof window.__cldSavingsTeardown === "function") {
+    try { window.__cldSavingsTeardown(); } catch (e) {}
+  }
+
   const CLOUD = "patrickg";
   const TRANSFORM = "q_auto:eco,f_auto";
   const cloudinaryPrefix = "https://res.cloudinary.com/" + CLOUD + "/image/fetch/" + TRANSFORM + "/";
@@ -337,6 +342,8 @@ async function cloudinarySavings() {
   // Anything the page's CSP refuses fires this event, which is the single most useful
   // signal for working out why a run came back empty.
   let acceptUsed = null, acceptSource = null;
+  let autoRescan = window.__cldAutoRescan === true;
+  let navigated = false, navTimer = 0;
   const csp = [], cspSeen = {};
   const onCsp = e => {
     const key = e.violatedDirective + "|" + e.blockedURI;
@@ -582,8 +589,63 @@ async function cloudinarySavings() {
     return { orig, cld, n, failed, pct: orig ? (1 - cld / orig) * 100 : 0 };
   }
 
+  // ---- Navigation handling --------------------------------------------------
+  // On a single-page-app route change the document survives, so without this the badges
+  // stay pinned to images that have gone and the totals describe the previous page.
+  function clearMarks() {
+    marks.forEach(m => {
+      if (m.badge) m.badge.remove();
+      m.img.style.removeProperty("outline");
+      m.img.style.removeProperty("outline-offset");
+      if (m.prevOutline) m.img.style.outline = m.prevOutline;
+      if (m.prevOffset) m.img.style.outlineOffset = m.prevOffset;
+    });
+    marks.length = 0;
+  }
+
+  let host = null;   // the panel's shadow host, built below but torn down from here
+  let lastUrl = location.href;
+  const origPush = history.pushState, origReplace = history.replaceState;
+  function onNav() {
+    if (location.href === lastUrl || navigated) return;
+    lastUrl = location.href;
+    clearMarks();
+    navigated = true;
+    render();
+    if (autoRescan) navTimer = setTimeout(rescan, 1500);  // let the new view settle first
+  }
+  history.pushState = function () { const r = origPush.apply(this, arguments); setTimeout(onNav, 0); return r; };
+  history.replaceState = function () { const r = origReplace.apply(this, arguments); setTimeout(onNav, 0); return r; };
+  addEventListener("popstate", onNav);
+  addEventListener("hashchange", onNav);
+  const urlPoll = setInterval(onNav, 1000);   // routers that swap the URL some other way
+
+  function teardown() {
+    clearTimeout(navTimer);
+    clearInterval(urlPoll);
+    clearMarks();
+    if (layer) layer.remove();
+    if (host) host.remove();
+    if (frame) frame.remove();
+    removeEventListener("scroll", schedule, { passive: true, capture: true });
+    removeEventListener("resize", schedule, { passive: true });
+    removeEventListener("popstate", onNav);
+    removeEventListener("hashchange", onNav);
+    document.removeEventListener("securitypolicyviolation", onCsp);
+    history.pushState = origPush;
+    history.replaceState = origReplace;
+    delete window.__cldSavingsTeardown;
+  }
+  window.__cldSavingsTeardown = teardown;
+
+  function rescan() {
+    window.__cldAutoRescan = autoRescan;
+    teardown();
+    cloudinarySavings();
+  }
+
   // ---- Panel (shadow DOM so the page's CSS can't touch it) ------------------
-  const host = document.createElement("div");
+  host = document.createElement("div");
   important(host, { position: "fixed", bottom: "16px", right: "16px", "z-index": "2147483647" });
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML =
@@ -593,6 +655,12 @@ async function cloudinarySavings() {
       'color:#fff;border:2px solid #fff;border-radius:14px;box-shadow:0 6px 28px rgba(0,0,0,.4);' +
       'font:13px/1.45 system-ui,-apple-system,sans-serif;padding:14px 16px;text-shadow:0 1px 2px rgba(0,0,0,.3)}' +
     '.eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;opacity:.9}' +
+    '.hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}' +
+    'button.x{width:auto;margin:0;padding:0 2px;background:none;color:#fff;font-size:19px;' +
+      'line-height:1;border:0;opacity:.8;cursor:pointer;flex:none}' +
+    'button.x:hover{opacity:1}' +
+    '.auto{display:flex;align-items:center;gap:6px;margin-top:9px;font-size:10.5px;opacity:.92;cursor:pointer}' +
+    '.auto input{accent-color:#fff;cursor:pointer;margin:0}' +
     '.big{font-size:36px;font-weight:800;line-height:1.05;margin:3px 0 2px}' +
     '.sub{font-size:14px;font-weight:700}.sub2{font-size:11px;opacity:.9;margin-top:3px}' +
     '.sec{margin-top:12px;border-top:1px solid rgba(255,255,255,.35);padding-top:9px}' +
@@ -625,7 +693,23 @@ async function cloudinarySavings() {
     const anyDone = allDomains.some(d => d.state === "done");
     const busy = allDomains.some(d => d.state === "measuring");
 
-    let html = '<div class="eyebrow">' + (anyDone ? "Cloudinary would save" : "Analysing page") + '</div>';
+    const closeBtn = '<button class="x" id="cl" title="Close">&times;</button>';
+    const autoBox = '<label class="auto"><input type="checkbox" id="ar"' + (autoRescan ? " checked" : "") +
+      '> Re-scan automatically when the page changes</label>';
+
+    if (navigated) {
+      panel.innerHTML =
+        '<div class="hdr"><div class="eyebrow">Page changed</div>' + closeBtn + '</div>' +
+        '<div class="big" style="font-size:20px">Results cleared</div>' +
+        '<div class="sub2">This page navigated to a new URL, so the previous measurements no longer ' +
+        'describe what you are looking at.</div>' +
+        '<button id="rs">Re-scan this page</button>' + autoBox;
+      wire();
+      return;
+    }
+
+    let html = '<div class="hdr"><div class="eyebrow">' +
+      (anyDone ? "Cloudinary would save" : "Analysing page") + '</div>' + closeBtn + '</div>';
     if (anyDone) {
       html += '<div class="big">' + t.pct.toFixed(1) + '%</div>' +
         '<div class="sub">' + ((t.orig - t.cld) / 1000).toFixed(1) + ' KB across ' + t.n + ' images</div>' +
@@ -671,9 +755,16 @@ async function cloudinarySavings() {
     }
     html += '<button id="dg" class="ghost">' + (showDiag ? "Hide diagnostics" : "Diagnostics") + '</button>';
     if (showDiag) html += diagnosticsHtml();
+    html += autoBox;
 
     panel.innerHTML = html;
-    panel.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    wire();
+  }
+
+  function wire() {
+    const on = (sel, ev, fn) => { const el = panel.querySelector(sel); if (el) el.addEventListener(ev, fn); };
+
+    panel.querySelectorAll("input[type=checkbox][data-i]").forEach(cb => {
       cb.addEventListener("change", () => {
         const d = allDomains[+cb.dataset.i];
         d.selected = cb.checked;
@@ -682,14 +773,16 @@ async function cloudinarySavings() {
         applyVisibility();
       });
     });
-    panel.querySelector("#tg").addEventListener("click", () => {
-      overlaysVisible = !overlaysVisible;
-      applyVisibility();
-      render();
+    on("#tg", "click", () => { overlaysVisible = !overlaysVisible; applyVisibility(); render(); });
+    on("#dg", "click", () => { showDiag = !showDiag; render(); });
+    on("#av", "click", () => { showAdv = !showAdv; render(); });
+    on("#cl", "click", teardown);
+    on("#rs", "click", rescan);
+    on("#ar", "change", e => {
+      autoRescan = e.target.checked;
+      window.__cldAutoRescan = autoRescan;
+      if (autoRescan && navigated) { clearTimeout(navTimer); navTimer = setTimeout(rescan, 400); }
     });
-    panel.querySelector("#dg").addEventListener("click", () => { showDiag = !showDiag; render(); });
-    const adv = panel.querySelector("#av");
-    if (adv) adv.addEventListener("click", () => { showAdv = !showAdv; render(); });
   }
 
   function applyVisibility() {
