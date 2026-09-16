@@ -547,8 +547,9 @@ async function cloudinarySavings() {
     d.state = "measuring";
     render();
     const urls = d.urls.map(r => r.url);
+    // Scene7 always negotiates on Accept, so a server-side original would be wrong by design.
     const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix,
-      accept, known: knownSizes(urls) }, "cld-results", 90000);
+      accept, known: knownSizes(urls), allowServerSide: !d.scene7 }, "cld-results", 90000);
     const out = msg && msg.results;
     if (msg && msg.meta) { acceptUsed = msg.meta.accept; acceptSource = msg.meta.acceptSource; }
     if (!out) {
@@ -561,6 +562,15 @@ async function cloudinarySavings() {
     }
     d.results = new Map(out.map(r => [r.url, r]));
     d.state = "done";
+
+    // Cloudinary's fetcher sends Accept: */*, so a server-side original is only correct for
+    // hosts that don't vary by Accept. Measured examples of getting this wrong: Scene7 reports
+    // 333KB server-side where a browser receives 197KB, and images.acer.com 10.5KB vs 2.6KB.
+    // Keep such figures out of the headline unless the user deliberately opts in.
+    if ([...d.results.values()].some(r => r.orig && r.origSource === "cloudinary")) {
+      d.serverSide = true;
+      if (!d.userForced) d.selected = false;
+    }
     d.urls.forEach(rec => {
       const r = d.results.get(rec.url);
       if (r && r.orig && r.cld) addMark(rec, r);
@@ -584,6 +594,16 @@ async function cloudinarySavings() {
       r.url + "\n  original: " + (r.origError || "ok") + "\n  cloudinary: " + (r.cldError || "ok") +
       (r.cldError && r.cldUrl ? "\n  to see Cloudinary's own reason:\n    curl -sI '" + r.cldUrl +
         "' | grep -i x-cld-error" : "")));
+    const serverSide = rows.filter(r => r.origSource === "cloudinary" && r.orig);
+    if (serverSide.length) {
+      console.warn("%c" + d.host + " originals were measured server-side by Cloudinary (Accept: */*).",
+        "font-weight:700");
+      console.warn("This is only accurate if the host does not vary by Accept. Check with:\n" +
+        "  curl -sI -H 'Accept: image/avif,image/webp,*/*' '" + serverSide[0].url + "' | grep -i content-length\n" +
+        "  curl -sI -H 'Accept: */*' '" + serverSide[0].url + "' | grep -i content-length\n" +
+        "If the two lengths match, the figure is sound. If they differ, this host negotiates and " +
+        "the saving shown is overstated.");
+    }
     console.groupEnd();
   }
 
@@ -694,6 +714,10 @@ async function cloudinarySavings() {
     '.dv{font-size:13px;font-weight:800;flex:none;padding-left:4px}' +
     '.tag{display:inline-block;font-size:8px;letter-spacing:.06em;background:rgba(255,255,255,.28);' +
       'border-radius:3px;padding:1px 4px;margin-left:4px;vertical-align:1px}' +
+    '.tag.warn{background:rgba(0,0,0,.42)}' +
+    '.warnbox{margin-top:10px;background:rgba(0,0,0,.3);border-radius:8px;padding:9px 10px;' +
+      'font-size:10.5px;line-height:1.45;text-shadow:none}' +
+    '.warnbox b{font-weight:800}' +
     'button{width:100%;margin-top:7px;background:rgba(255,255,255,.95);color:' + GREEN_DEEP + ';' +
       'border:0;border-radius:8px;padding:7px 10px;font:700 12px system-ui,sans-serif;cursor:pointer}' +
     'button.ghost{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5)}' +
@@ -743,13 +767,15 @@ async function cloudinarySavings() {
     const row = d => {
       const i = allDomains.indexOf(d);
       const st = domainStat(d);
-      const note = d.state === "measuring" ? "measuring&hellip;"
+      let note = d.state === "measuring" ? "measuring&hellip;"
         : d.state === "failed" ? "failed"
         : st ? st.n + " measured" + (st.failed ? ", " + st.failed + " failed" : "")
         : d.big + " over " + THUMB + "px of " + d.total;
+      if (d.serverSide) note += d.selected ? " &middot; server-side estimate" : " &middot; excluded, unverifiable";
       return '<label class="d"><input type="checkbox" data-i="' + i + '"' + (d.selected ? " checked" : "") + '>' +
         '<span class="dn"><span class="dh">' + d.host +
-          (d.scene7 ? '<span class="tag">SCENE7</span>' : "") + '</span>' +
+          (d.scene7 ? '<span class="tag">SCENE7</span>' : "") +
+          (d.serverSide ? '<span class="tag warn">SERVER-SIDE</span>' : "") + '</span>' +
         '<span class="dm">' + note + '</span></span>' +
         '<span class="dv">' + (st && st.n ? "&minus;" + st.pct.toFixed(0) + "%" : "") + '</span></label>';
     };
@@ -763,6 +789,16 @@ async function cloudinarySavings() {
     html += primary.length ? primary.map(row).join("")
       : '<div class="dm" style="padding:2px 0">nothing over ' + THUMB + 'px &mdash; see Advanced</div>';
     html += '</div>';
+
+    const ss = allDomains.filter(d => d.serverSide);
+    if (ss.length) {
+      html += '<div class="warnbox">' + ss.length + ' domain' + (ss.length === 1 ? "" : "s") +
+        ' could only be measured <b>server-side</b>, because the host refuses cross-origin reads. ' +
+        'Cloudinary fetches those with <code>Accept: */*</code>, so the original is only right if ' +
+        'the host doesn\'t vary by Accept &mdash; ' +
+        (ss.some(d => d.selected) ? 'included in the total above.' : 'left out of the total above.') +
+        ' Verify before quoting: the console prints a two-line curl check.</div>';
+    }
 
     html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>';
     if (minor.length) {
@@ -789,6 +825,7 @@ async function cloudinarySavings() {
       cb.addEventListener("change", () => {
         const d = allDomains[+cb.dataset.i];
         d.selected = cb.checked;
+        if (cb.checked) d.userForced = true;
         if (d.selected && d.state === "idle") measureDomain(d);
         else render();
         applyVisibility();

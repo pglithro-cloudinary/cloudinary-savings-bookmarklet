@@ -225,8 +225,10 @@ framing it grants no read access that the framing page didn't already have.
           cldStatus: pair[1].status, cldMethod: pair[1].method
         };
 
-        // If the host wouldn't let us read it, let Cloudinary measure it server-side.
-        if (!out.orig || !out.cld) {
+        // If the host wouldn't let us read it, let Cloudinary measure it server-side -- but not
+        // for hosts the caller knows content-negotiate, where Cloudinary's Accept: */* fetch
+        // would report a different representation than the browser receives.
+        if ((!out.orig || !out.cld) && msg.allowServerSide !== false) {
           var gi = await getInfo(url, accept, prefix);
           if (gi && !gi.error) {
             if (!out.orig && gi.orig) {
