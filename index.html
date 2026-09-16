@@ -339,6 +339,7 @@ async function cloudinarySavings() {
     return h.toString(16).padStart(8, "0");
   };
   const MY_FP = fingerprint(cloudinarySavings.toString());
+  const HELPER = HELPER_BASE + "?b=" + MY_FP;
   const BUILD = VERSION + " \u00b7 build " + MY_FP;
   const INSTALL_URL = "https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/";
 
@@ -350,7 +351,10 @@ async function cloudinarySavings() {
   const CLOUD = "patrickg";
   const TRANSFORM = "q_auto:eco,f_auto";
   const cloudinaryPrefix = "https://res.cloudinary.com/" + CLOUD + "/image/fetch/" + TRANSFORM + "/";
-  const HELPER = "https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/helper.html";
+  // Keyed to this payload's own build so a cached helper can never be paired with a newer
+  // payload. GitHub Pages serves helper.html with a 10-minute max-age, which is long enough
+  // for a stale helper to break a live demo.
+  const HELPER_BASE = "https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/helper.html";
   const HELPER_ORIGIN = "https://pglithro-cloudinary.github.io";
   const GREEN = "#00C853", GREEN_DEEP = "#00893C";
   // White-recoloured so it reads on the green panel; w_240 for a 110px slot at 2x (880 bytes).
