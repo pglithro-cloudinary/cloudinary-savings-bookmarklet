@@ -7,8 +7,8 @@ imagery, measures those against Cloudinary in fetch mode with `f_auto,q_auto:eco
 the byte savings in green. Domains can be toggled in and out live, and anything blocked is
 reported with the reason.
 
-**Install page:** https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/
-**Test fixture:** https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/test-fixture.html
+**Install page:** https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/
+**Test fixture:** https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/test-fixture.html
 
 ## How domains are chosen
 
@@ -55,12 +55,31 @@ is never touched; they reposition on scroll and resize. The panel lives in a sha
 CSS can't reach it. Badge sizes step down with the image (full → percentage-only → ring-only
 below 45px).
 
-## Accuracy note
+## Request fairness
 
-Modern image CDNs already negotiate AVIF. Both sides are requested with the same browser `Accept`
-header, and full-size badges print `avif → avif` (or `jpeg → avif`) so the comparison is visible.
-Measuring the origin as JPEG against Cloudinary as AVIF overstates the win by roughly 7 points on
-Scene7.
+The origin and the Cloudinary URL are measured by the same function, from the same origin, with
+the same options — they differ only in the URL. Verified against an echo endpoint: every header
+that reaches the server is byte-identical across the two requests.
+
+`Accept` is the only header set explicitly, and it matters — it decides which format a CDN hands
+back. It is not guessed from the UA string: a service worker (`sw.js`) observes the header this
+browser actually sends on an `<img>` request and both sides use that exact string. If service
+workers are unavailable it falls back to a UA-derived guess, and diagnostics say which was used.
+
+The HTTP method used on each side is recorded, and any image measured by different methods (one
+side falling back from `HEAD` to `GET`) is flagged in diagnostics.
+
+Two honest caveats, both symmetric so they don't skew the comparison:
+
+- Requests carry `Sec-Fetch-Dest: empty` / `Sec-Fetch-Mode: cors` because they're `fetch` calls,
+  where a real `<img>` load would send `image` / `no-cors`.
+- `Referer` is the helper's origin, not the page being measured. A host with Referer-keyed hotlink
+  protection will refuse both sides equally, surfacing as HTTP 403 in diagnostics.
+
+Modern CDNs already negotiate AVIF, and full-size badges print `avif → avif` (or `jpeg → avif`) so
+the like-for-like comparison is visible. Measuring the origin as JPEG against Cloudinary as AVIF
+would overstate the win by roughly 7 points on Scene7 — 322 KB with a default `*/*` Accept versus
+197 KB with a real browser one.
 
 ## Verified
 
