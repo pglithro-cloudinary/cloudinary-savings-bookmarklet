@@ -117,9 +117,10 @@
   <span class="eyebrow">Cloudinary · Sales demo tool</span>
   <h1>George (Asda) image savings bookmarklet</h1>
   <p class="lede">
-    A one-click browser bookmark that scans any george.com page, re-fetches every
-    <code>asda.scene7.com</code> image through Cloudinary with <code>f_auto</code> / <code>q_auto:eco</code>,
-    and overlays the byte savings in green directly on each image.
+    A one-click browser bookmark that scans any george.com page, measures every
+    <code>asda.scene7.com</code> image against Cloudinary with <code>f_auto</code> / <code>q_auto:eco</code>,
+    and overlays the byte savings in green directly on each image. Works around the
+    Content-Security-Policy George now enforces.
   </p>
 </header>
 
@@ -171,7 +172,8 @@
     <li>Scroll down so the lazy-loaded images actually load. The bookmarklet only sees images already in the DOM.</li>
     <li>Click the <strong>⬇ Cloudinary Savings</strong> bookmark.</li>
     <li>Each Scene7 image gets a bright green badge with its saving, and a summary panel appears bottom-right with the page total. Badges scale to the image — small nav thumbnails get a compact percentage-only badge so they stay readable.</li>
-    <li>Open the console (<code>⌘⌥J</code> / <code>F12</code>) for the full per-image breakdown with both URLs.</li>
+    <li>A green <em>Measuring…</em> panel appears first while the helper works, then flips to the result. Give it a couple of seconds.</li>
+    <li>Open the console (<code>⌘⌥J</code> / <code>F12</code>) for the full per-image breakdown with both URLs and both content types.</li>
     <li>Use <strong>Hide overlays</strong> in the summary panel to flip between the clean page and the annotated one while presenting.</li>
   </ol>
   <p style="margin-top:18px;margin-bottom:10px;font-weight:600;">What the badges look like:</p>
@@ -191,13 +193,46 @@
   </div>
 </div>
 
+<h2>Why it needs a helper page</h2>
+<div class="card">
+  <p>
+    George's pages are served behind Cloudflare with a strict Content-Security-Policy. Its
+    <code>connect-src</code> allowlist covers Asda's own domains and their analytics vendors — and nothing
+    else. That means a <code>fetch()</code> fired from the page is refused for <strong>both</strong>
+    <code>res.cloudinary.com</code> <em>and</em> <code>asda.scene7.com</code>, which is why the earlier version of
+    this tool reported <code>0.00 KB</code> and <code>NaN%</code> for everything.
+  </p>
+  <p>
+    The CSP also sets <code>img-src</code> without Cloudinary on it, so the page can't even display a
+    Cloudinary-served image. A true side-by-side visual swap isn't possible from a bookmarklet.
+  </p>
+  <p>
+    What the CSP <em>does</em> allow is <code>frame-src *</code> — the page may embed any origin. A cross-origin
+    iframe is a separate document governed by its own CSP, not the parent's. So the bookmarklet drops a hidden
+    iframe pointing at <code>helper.html</code> on this domain, the helper does the measuring (both Scene7 and
+    Cloudinary send <code>access-control-allow-origin: *</code>, so it's allowed to read
+    <code>content-length</code>), and posts the numbers back via <code>postMessage</code>. The page itself only
+    ever draws DOM overlays, which CSP doesn't restrict.
+  </p>
+  <p style="margin-bottom:0">
+    The helper only measures URLs on <code>asda.scene7.com</code> and only through the configured Cloudinary
+    cloud, so framing it doesn't turn it into a general-purpose measurement proxy.
+  </p>
+</div>
+
 <h2>Good to know</h2>
 <div class="note">
   <ul style="margin:0;padding-left:18px;">
-    <li>Sizes come from the <code>content-length</code> header on a <code>HEAD</code> request, so any image served without that header is skipped from the totals.</li>
-    <li>The Cloudinary side uses the <code>patrickg</code> cloud in fetch mode. First run on a new image is a cache miss, so the numbers are stable but the fetch can be a little slow.</li>
-    <li>Savings reflect format and quality only (<code>f_auto</code>, <code>q_auto:eco</code>) — no resizing. Adding responsive sizing would push the numbers considerably further, which is a good thing to say out loud in the room.</li>
-    <li>The page's own CSP can block the Cloudinary fetches on some sites. If every image comes back empty, check the console for CSP errors.</li>
+    <li><strong>The numbers are like-for-like.</strong> Scene7 already negotiates AVIF when the browser asks for
+      it, so both sides are requested with the same <code>Accept</code> header. Measuring Scene7 as JPEG against
+      Cloudinary as AVIF would overstate the win by roughly 7 points — worth knowing if their engineers check.</li>
+    <li>Savings reflect format and quality only (<code>f_auto</code>, <code>q_auto:eco</code>) — no resizing.
+      Adding responsive sizing pushes the numbers considerably further, which is a good thing to say out loud in the room.</li>
+    <li>Sizes come from <code>content-length</code> on a <code>HEAD</code> request; anything served without that
+      header is skipped from the totals.</li>
+    <li>Totals count each unique image URL once, even when the same image appears several times on the page.</li>
+    <li>The bookmarklet depends on <code>helper.html</code> on this GitHub Pages site being reachable. If the
+      helper can't be reached you'll get an explicit alert rather than silent zeroes.</li>
     <li>Refresh the page to clear all the overlays.</li>
   </ul>
 </div>
@@ -218,126 +253,22 @@
 async function cloudinarySavings() {
   const domain = "asda.scene7.com";
   const cloudinaryPrefix = "https://res.cloudinary.com/patrickg/image/fetch/q_auto:eco,f_auto/";
+  const HELPER = "https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/helper.html";
+  const HELPER_ORIGIN = "https://pglithro-cloudinary.github.io";
   const GREEN = "#00C853", GREEN_DEEP = "#00893C";
 
   const images = Array.from(document.images).filter(img => img.src.includes(domain));
   if (images.length === 0) { alert("No images from " + domain + " found."); return; }
+  const urls = Array.from(new Set(images.map(img => img.src)));
 
-  performance?.clearResourceTimings?.();
-  performance?.setResourceTimingBufferSize?.(500);
-  window.addEventListener("resourcetimingbufferfull", ev => {
-    ev.stopImmediatePropagation();
-    performance.clearResourceTimings?.();
-  });
-
+  // Same Accept header goes to both sides, so we compare like with like.
+  // Scene7 already negotiates AVIF, and measuring it as JPEG would overstate the win.
   const acceptHeader = navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")
     ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
-  let totalOrig = 0, totalCld = 0;
-  const badges = [], touched = [];
-
-  const results = await Promise.all(images.map(async img => {
-    const origUrl = img.src, cldUrl = cloudinaryPrefix + encodeURIComponent(origUrl);
-    let origSize = null, cldSize = null;
-
-    try {
-      const respOrig = await fetch(origUrl, { method: "HEAD" });
-      const lenOrig = respOrig.headers.get("content-length");
-      if (lenOrig) { origSize = Number(lenOrig); totalOrig += origSize; }
-    } catch {}
-
-    try {
-      const respCld = await fetch(cldUrl, { method: "HEAD", headers: { "Accept": acceptHeader } });
-      const lenCld = respCld.headers.get("content-length");
-      if (lenCld) { cldSize = Number(lenCld); totalCld += cldSize; }
-    } catch {}
-
-    if (img && origSize && cldSize) {
-      const savedBytes = origSize - cldSize;
-      const savedKB = (savedBytes / 1000).toFixed(1);
-      const savedPct = ((1 - cldSize / origSize) * 100).toFixed(1);
-
-      // Scale the badge to the rendered image. Nav thumbnails only get the percentage.
-      const rect = img.getBoundingClientRect();
-      const w = rect.width || img.width || 0, h = rect.height || img.height || 0;
-      const size = (w < 100 || h < 100) ? "tiny" : (w < 220 || h < 180) ? "small" : "full";
-
-      const badge = document.createElement("div");
-      if (size === "tiny") {
-        badge.innerHTML =
-          '<div style="font-weight:800;font-size:11px;line-height:1.1;letter-spacing:-0.3px;">' +
-            '&#8595;' + Math.round(savedPct) + '%</div>';
-      } else if (size === "small") {
-        badge.innerHTML =
-          '<div style="font-weight:800;font-size:15px;line-height:1.1;letter-spacing:-0.4px;">' +
-            '&#8595; ' + Math.round(savedPct) + '%</div>';
-      } else {
-        badge.innerHTML =
-          '<div style="font-weight:800;font-size:19px;line-height:1.1;letter-spacing:-0.5px;">&#8595; ' + savedPct + '%</div>' +
-          '<div style="font-size:12px;font-weight:700;margin-top:2px;">' + savedKB + ' KB saved</div>' +
-          '<div style="font-size:10px;opacity:.9;margin-top:1px;">' +
-            (origSize / 1000).toFixed(0) + ' KB &rarr; ' + (cldSize / 1000).toFixed(0) + ' KB</div>';
-      }
-
-      const chrome = {
-        tiny:  { offset: "2px", padding: "1px 4px", border: "1px",   radius: "5px",  glow: "0 1px 4px rgba(0,0,0,.35)",     ring: "2px" },
-        small: { offset: "4px", padding: "3px 6px", border: "1.5px", radius: "7px",  glow: "0 2px 8px rgba(0,200,83,.55)",  ring: "3px" },
-        full:  { offset: "6px", padding: "7px 10px", border: "2px",  radius: "10px", glow: "0 2px 14px rgba(0,200,83,.65)", ring: "3px" }
-      }[size];
-
-      Object.assign(badge.style, {
-        position: "absolute", top: chrome.offset, left: chrome.offset,
-        background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
-        color: "#fff", padding: chrome.padding, textAlign: "center",
-        fontFamily: "ui-monospace,Menlo,Consolas,monospace",
-        border: chrome.border + " solid #ffffff", borderRadius: chrome.radius,
-        boxShadow: chrome.glow,
-        zIndex: 999999, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,.35)"
-      });
-
-      const wrapper = document.createElement("div");
-      wrapper.style.position = "relative";
-      img.parentNode.insertBefore(wrapper, img);
-      wrapper.appendChild(img);
-      wrapper.appendChild(badge);
-
-      const prevOutline = img.style.outline, prevOffset = img.style.outlineOffset;
-      const outline = chrome.ring + " solid " + GREEN, outlineOffset = "-" + chrome.ring;
-      img.style.outline = outline;
-      img.style.outlineOffset = outlineOffset;
-
-      badges.push(badge);
-      touched.push({
-        img: img, outline: outline, outlineOffset: outlineOffset,
-        prevOutline: prevOutline, prevOffset: prevOffset
-      });
-    }
-
-    return "Image:\n" + origUrl + "\nCloudinary URL:\n" + cldUrl +
-      "\nOriginal: " + (origSize / 1000).toFixed(2) + " KB" +
-      "\nCloudinary: " + (cldSize / 1000).toFixed(2) + " KB" +
-      "\nSaved: " + ((origSize - cldSize) / 1000).toFixed(2) + " KB (" +
-      ((1 - cldSize / origSize) * 100).toFixed(1) + "%)";
-  }));
-
-  const totalOrigKB = (totalOrig / 1000).toFixed(2);
-  const totalCldKB = (totalCld / 1000).toFixed(2);
-  const totalSavedKB = (totalOrig - totalCld) / 1000;
-  const totalPct = totalOrig > 0 ? ((totalSavedKB / (totalOrig / 1000)) * 100).toFixed(1) : "0";
-
-  console.log(results.join("\n\n"));
-  console.log("\nTotal Original: " + totalOrigKB + " KB\nTotal Cloudinary: " + totalCldKB +
-    " KB\nSaved: " + totalSavedKB.toFixed(2) + " KB (" + totalPct + "%)");
-
-  // Green summary panel, replaces squinting at an alert box.
-  const panel = document.createElement("div");
-  panel.innerHTML =
-    '<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.9;">Cloudinary would save</div>' +
-    '<div style="font-size:38px;font-weight:800;line-height:1.05;margin:4px 0 2px;">' + totalPct + '%</div>' +
-    '<div style="font-size:15px;font-weight:700;">' + totalSavedKB.toFixed(1) + ' KB across ' + badges.length + ' images</div>' +
-    '<div style="font-size:12px;opacity:.92;margin-top:6px;">' + totalOrigKB + ' KB &rarr; ' + totalCldKB + ' KB</div>';
-  Object.assign(panel.style, {
+  const shell = document.createElement("div");
+  Object.assign(shell.style, {
     position: "fixed", bottom: "16px", right: "16px", zIndex: 1000000,
     background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
     color: "#fff", padding: "16px 18px", borderRadius: "14px",
@@ -345,6 +276,156 @@ async function cloudinarySavings() {
     fontFamily: "system-ui,-apple-system,sans-serif", minWidth: "210px",
     textShadow: "0 1px 2px rgba(0,0,0,.3)"
   });
+  shell.innerHTML = '<div style="font-size:14px;font-weight:700;">Measuring ' + urls.length + ' images...</div>' +
+    '<div style="font-size:11px;opacity:.9;margin-top:4px;">via measurement helper</div>';
+  document.body.appendChild(shell);
+
+  // This page's CSP blocks connect-src to both Scene7 and Cloudinary, so the measuring
+  // happens inside a helper iframe on our own origin, which has its own (permissive) CSP.
+  // frame-src on this site is "*", so the helper is allowed to load.
+  function measure() {
+    return new Promise(resolve => {
+      const frame = document.createElement("iframe");
+      frame.setAttribute("aria-hidden", "true");
+      frame.style.cssText = "position:fixed;left:-9999px;top:0;width:10px;height:10px;border:0";
+      let settled = false;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onMessage);
+        frame.remove();
+        resolve(value);
+      };
+      function onMessage(ev) {
+        if (ev.origin !== HELPER_ORIGIN || !ev.data) return;
+        if (ev.data.type === "cld-helper-ready") {
+          frame.contentWindow.postMessage(
+            { type: "cld-measure", id: 1, urls: urls, prefix: cloudinaryPrefix, accept: acceptHeader },
+            HELPER_ORIGIN
+          );
+        } else if (ev.data.type === "cld-results") {
+          finish(ev.data.results);
+        }
+      }
+      window.addEventListener("message", onMessage);
+      setTimeout(() => finish(null), 45000);
+      frame.src = HELPER;
+      document.body.appendChild(frame);
+    });
+  }
+
+  const measured = await measure();
+  if (!measured) {
+    shell.remove();
+    alert("Couldn't reach the measurement helper.\n\nEither the helper page is unreachable, or this site's CSP is now blocking frame-src too. Check the console for CSP violations.");
+    return;
+  }
+
+  const byUrl = {};
+  measured.forEach(r => { byUrl[r.url] = r; });
+
+  // Totals use unique URLs: the browser only downloads each one once.
+  let totalOrig = 0, totalCld = 0, counted = 0;
+  urls.forEach(u => {
+    const r = byUrl[u];
+    if (r && r.orig && r.cld) { totalOrig += r.orig; totalCld += r.cld; counted++; }
+  });
+
+  const badges = [], touched = [];
+
+  images.forEach(img => {
+    const r = byUrl[img.src];
+    if (!r || !r.orig || !r.cld) return;
+    const origSize = r.orig, cldSize = r.cld;
+    const savedKB = ((origSize - cldSize) / 1000).toFixed(1);
+    const savedPct = ((1 - cldSize / origSize) * 100).toFixed(1);
+
+    // Scale the badge to the rendered image. Nav thumbnails only get the percentage.
+    const rect = img.getBoundingClientRect();
+    const w = rect.width || img.width || 0, h = rect.height || img.height || 0;
+    const size = (w < 100 || h < 100) ? "tiny" : (w < 220 || h < 180) ? "small" : "full";
+
+    const badge = document.createElement("div");
+    if (size === "tiny") {
+      badge.innerHTML =
+        '<div style="font-weight:800;font-size:11px;line-height:1.1;letter-spacing:-0.3px;">' +
+          '&#8595;' + Math.round(savedPct) + '%</div>';
+    } else if (size === "small") {
+      badge.innerHTML =
+        '<div style="font-weight:800;font-size:15px;line-height:1.1;letter-spacing:-0.4px;">' +
+          '&#8595; ' + Math.round(savedPct) + '%</div>';
+    } else {
+      const fmt = (r.origType || "").replace("image/", "") + " &rarr; " + (r.cldType || "").replace("image/", "");
+      badge.innerHTML =
+        '<div style="font-weight:800;font-size:19px;line-height:1.1;letter-spacing:-0.5px;">&#8595; ' + savedPct + '%</div>' +
+        '<div style="font-size:12px;font-weight:700;margin-top:2px;">' + savedKB + ' KB saved</div>' +
+        '<div style="font-size:10px;opacity:.9;margin-top:1px;">' +
+          (origSize / 1000).toFixed(1) + ' KB &rarr; ' + (cldSize / 1000).toFixed(1) + ' KB</div>' +
+        '<div style="font-size:9px;opacity:.8;margin-top:1px;">' + fmt + '</div>';
+    }
+
+    const chrome = {
+      tiny:  { offset: "2px", padding: "1px 4px", border: "1px",   radius: "5px",  glow: "0 1px 4px rgba(0,0,0,.35)",     ring: "2px" },
+      small: { offset: "4px", padding: "3px 6px", border: "1.5px", radius: "7px",  glow: "0 2px 8px rgba(0,200,83,.55)",  ring: "3px" },
+      full:  { offset: "6px", padding: "7px 10px", border: "2px",  radius: "10px", glow: "0 2px 14px rgba(0,200,83,.65)", ring: "3px" }
+    }[size];
+
+    Object.assign(badge.style, {
+      position: "absolute", top: chrome.offset, left: chrome.offset,
+      background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
+      color: "#fff", padding: chrome.padding, textAlign: "center",
+      fontFamily: "ui-monospace,Menlo,Consolas,monospace",
+      border: chrome.border + " solid #ffffff", borderRadius: chrome.radius,
+      boxShadow: chrome.glow,
+      zIndex: 999999, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,.35)"
+    });
+
+    const wrapper = document.createElement("div");
+    wrapper.style.position = "relative";
+    img.parentNode.insertBefore(wrapper, img);
+    wrapper.appendChild(img);
+    wrapper.appendChild(badge);
+
+    const prevOutline = img.style.outline, prevOffset = img.style.outlineOffset;
+    const outline = chrome.ring + " solid " + GREEN, outlineOffset = "-" + chrome.ring;
+    img.style.outline = outline;
+    img.style.outlineOffset = outlineOffset;
+
+    badges.push(badge);
+    touched.push({
+      img: img, outline: outline, outlineOffset: outlineOffset,
+      prevOutline: prevOutline, prevOffset: prevOffset
+    });
+  });
+
+  const log = measured.map(r => {
+    if (!r.orig || !r.cld) {
+      return "Image:\n" + r.url + "\nNot measured: " + (r.origError || "") + " / " + (r.cldError || "");
+    }
+    return "Image:\n" + r.url + "\nCloudinary URL:\n" + r.cldUrl +
+      "\nOriginal: " + (r.orig / 1000).toFixed(2) + " KB (" + (r.origType || "?") + ")" +
+      "\nCloudinary: " + (r.cld / 1000).toFixed(2) + " KB (" + (r.cldType || "?") + ")" +
+      "\nSaved: " + ((r.orig - r.cld) / 1000).toFixed(2) + " KB (" +
+      ((1 - r.cld / r.orig) * 100).toFixed(1) + "%)";
+  });
+
+  const totalOrigKB = (totalOrig / 1000).toFixed(2);
+  const totalCldKB = (totalCld / 1000).toFixed(2);
+  const totalSavedKB = (totalOrig - totalCld) / 1000;
+  const totalPct = totalOrig > 0 ? ((totalSavedKB / (totalOrig / 1000)) * 100).toFixed(1) : "0";
+
+  console.log(log.join("\n\n"));
+  console.log("\nUnique images measured: " + counted + " of " + urls.length +
+    "\nTotal Original: " + totalOrigKB + " KB\nTotal Cloudinary: " + totalCldKB +
+    " KB\nSaved: " + totalSavedKB.toFixed(2) + " KB (" + totalPct + "%)" +
+    "\nBoth sides requested with Accept: " + acceptHeader);
+
+  shell.innerHTML =
+    '<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.9;">Cloudinary would save</div>' +
+    '<div style="font-size:38px;font-weight:800;line-height:1.05;margin:4px 0 2px;">' + totalPct + '%</div>' +
+    '<div style="font-size:15px;font-weight:700;">' + totalSavedKB.toFixed(1) + ' KB across ' + counted + ' images</div>' +
+    '<div style="font-size:12px;opacity:.92;margin-top:6px;">' + totalOrigKB + ' KB &rarr; ' + totalCldKB + ' KB</div>' +
+    '<div style="font-size:10px;opacity:.8;margin-top:4px;">like-for-like, same Accept header</div>';
 
   const toggle = document.createElement("button");
   toggle.textContent = "Hide overlays";
@@ -354,8 +435,7 @@ async function cloudinarySavings() {
     cursor: "pointer", fontSize: "13px", fontWeight: "700",
     fontFamily: "system-ui,-apple-system,sans-serif"
   });
-  panel.appendChild(toggle);
-  document.body.appendChild(panel);
+  shell.appendChild(toggle);
 
   let visible = true;
   toggle.addEventListener("click", () => {
