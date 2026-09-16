@@ -188,9 +188,17 @@
     </div>
     <div>
       <span class="preview-badge xs"><b>↓62%</b></span>
-      <div class="preview-label">Nav thumbnails<br>(under 100px)</div>
+      <div class="preview-label">Nav thumbnails<br>(45–100px)</div>
+    </div>
+    <div>
+      <span style="display:inline-block;width:26px;height:26px;background:#c9ccd1;outline:2px solid #00C853;outline-offset:-2px;border-radius:2px;"></span>
+      <div class="preview-label">Colour swatches<br>(under 45px)</div>
     </div>
   </div>
+  <p style="margin:12px 0 0;color:var(--muted);font-size:14px;">
+    Anything under 45px — colour swatches, mostly — gets the green ring but no badge; a badge that size
+    would just cover the image. They still count toward the page total.
+  </p>
 </div>
 
 <h2>Why it needs a helper page</h2>
@@ -343,7 +351,20 @@ async function cloudinarySavings() {
     // Scale the badge to the rendered image. Nav thumbnails only get the percentage.
     const rect = img.getBoundingClientRect();
     const w = rect.width || img.width || 0, h = rect.height || img.height || 0;
-    const size = (w < 100 || h < 100) ? "tiny" : (w < 220 || h < 180) ? "small" : "full";
+    const size = (w < 45 || h < 45) ? "micro"
+      : (w < 100 || h < 100) ? "tiny"
+      : (w < 220 || h < 180) ? "small" : "full";
+
+    // Colour swatches and the like are too small to carry any legible badge.
+    // They still count toward the totals; they just get the green ring.
+    if (size === "micro") {
+      const prevO = img.style.outline, prevF = img.style.outlineOffset;
+      const o = "2px solid " + GREEN;
+      img.style.outline = o;
+      img.style.outlineOffset = "-2px";
+      touched.push({ img: img, outline: o, outlineOffset: "-2px", prevOutline: prevO, prevOffset: prevF });
+      return;
+    }
 
     const badge = document.createElement("div");
     if (size === "tiny") {
