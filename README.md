@@ -24,6 +24,49 @@ anything ticked moves back into the main list so it's clear what's feeding the t
 Scene7 / Dynamic Media hosts get a `SCENE7` tag, confirmed by asking the host's Image Serving API
 for its `#S7Z` signature (`?req=exists`). That is cosmetic labelling only and gates nothing.
 
+## How originals get measured
+
+Three paths, best first. Diagnostics report which one each domain used.
+
+1. **Resource Timing, in the page.** `encodedBodySize` is readable for same-origin images, and
+   for cross-origin ones sending `Timing-Allow-Origin`. This is the real number of bytes the
+   browser downloaded for its own `<img>` request — better than anything we can synthesise. It
+   covers sites serving imagery from their own origin, which is also the common case for hosts
+   that refuse CORS.
+2. **Cross-origin fetch from the helper**, with the browser's own `Accept` header.
+3. **Cloudinary, server-side.** `fl_getinfo` on the fetch URL returns `input.bytes` (what
+   Cloudinary pulled) and `output.bytes` (what it would serve, honouring our `Accept`). CORS
+   doesn't apply server-side, so this rescues hosts that block cross-origin reads entirely —
+   `images.jackjones.com`, for example, goes from unmeasurable to 10/10.
+
+The caveat on path 3, surfaced in diagnostics: `input.bytes` reflects Cloudinary's own request,
+not the browser's. If such a host varied its response by `Accept`, the original could be a
+different format than you'd receive. In practice hosts that block CORS are static CDNs that don't
+negotiate; the ones that do negotiate (Scene7, imgix, Cloudinary) all send `access-control-allow-origin`.
+
+## Known limitation: origins that block Cloudinary
+
+Some sites' WAFs refuse Cloudinary's fetcher. `www.banyantree.com` answers it with 403, so the
+original is measurable via Resource Timing but no optimised version can be produced at all.
+Cloudinary reports this as HTTP 400 with the real cause in an `x-cld-error` header that browsers
+can't read cross-origin, so the console prints a curl command that will show it:
+
+```
+curl -sI '<cloudinary fetch url>' | grep -i x-cld-error
+```
+
+Fixing it is an origin-side change — allowlist Cloudinary's fetcher, or use upload rather than
+fetch delivery.
+
+## Navigation
+
+Single-page-app route changes leave the document intact, which used to strand badges on images
+that had gone and totals describing the previous page. URL changes are now detected (via
+`pushState`/`replaceState`/`popstate`/`hashchange` plus a poll); overlays clear immediately and
+the panel offers a re-scan, with an opt-in "re-scan automatically" toggle. A close button unwinds
+everything — overlays removed, outlines restored, listeners detached, `history` methods restored.
+Re-running the bookmarklet tears down any previous instance first, so panels can't stack.
+
 ## Blocking diagnostics
 
 The **Diagnostics** button reports:
@@ -32,10 +75,10 @@ The **Diagnostics** button reports:
   blocked URL — the most useful signal when a run comes back empty.
 - **Helper reachability** — whether the measuring iframe loaded, and if not, whether `frame-src`
   was the cause.
-- **Per-domain failures**, grouped by cause: no `access-control-allow-origin` (host refuses
-  cross-origin reads — unfixable client-side), no `content-length` (chunked response), HTTP 403
-  (hotlink protection), or a Cloudinary 401/403 meaning the cloud isn't allowed to fetch that
-  domain.
+- **Per-domain failures**, grouped by cause: no `content-length` (chunked response), HTTP 403
+  (hotlink protection), a Cloudinary 401/403 meaning the cloud isn't allowed to fetch that domain,
+  or a Cloudinary 400 meaning the origin refused Cloudinary's fetcher.
+- **Which measurement path** produced each domain's originals, with the server-side caveat.
 
 Measurement degrades gracefully: `HEAD` first, falling back to `GET` with the body cancelled once
 headers arrive, for hosts that reject HEAD or omit `content-length`. When a fetch fails outright a
@@ -93,6 +136,8 @@ would overstate the win by roughly 7 points on Scene7 — 322 KB with a default 
 | `direct.asda.com` (George, strict CSP) | 16-of-29 rule correct, CSP violations captured, helper loads |
 | `www.acer.com` | 46/46 measured, 52.8% |
 | `www.ikea.com`, `en.wikipedia.org` | Confirmed `connect-src` blocks third-party fetch (helper needed) |
+| `images.jackjones.com` (no CORS) | 0/10 → **10/10 measured, 58.7%** via server-side `fl_getinfo` |
+| `www.banyantree.com` (no CORS) | Originals readable via Resource Timing; Cloudinary blocked by origin WAF |
 
 ## Notes
 
