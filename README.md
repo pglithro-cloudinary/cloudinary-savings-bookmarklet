@@ -164,6 +164,35 @@ would overstate the win by roughly 7 points on Scene7 — 322 KB with a default 
 | `images.jackjones.com` (no CORS) | 64 measured via `fl_getinfo`; excluded by default, 58.9% on opt-in |
 | `www.banyantree.com` (no CORS) | Originals readable via Resource Timing; Cloudinary blocked by origin WAF |
 
+## Versioning and staleness
+
+Payload changes need the bookmark re-dragging, so the payload hashes its own source (FNV-1a) at
+runtime and the install page hashes the same string — verified byte-identical between the file
+slice and `Function.prototype.toString`, so they agree by construction.
+
+The version and build are shown next to the drag button and at the top of the diagnostics pane.
+A running bookmarklet also asks the helper (same-origin with the install page) what the published
+build is; on a mismatch it shows an amber banner with both hashes and a link to re-install. It
+stays silent if the helper can't be reached, so it never false-alarms.
+
+`helper.html` is requested as `helper.html?b=<build>`. GitHub Pages serves it with `max-age=600`,
+so without this a fresh payload could be paired with a ten-minute-old cached helper missing the
+endpoints it calls.
+
+## Testing
+
+```
+node smoke-test.js
+```
+
+Extracts the payload as the install page does and runs it against a DOM stub. `node --check`
+can't see temporal-dead-zone or declaration-order faults; this does, and two such bugs reached
+deploy before it existed.
+
+`test-fixture.html` on the same origin runs the deployed payload against four image domains at
+four size tiers — useful because most real sites block `connect-src` to anything they don't own,
+which stops you loading the payload from the page you want to test on.
+
 ## Notes
 
 - Sizes come from `content-length`; anything served without it is skipped.
