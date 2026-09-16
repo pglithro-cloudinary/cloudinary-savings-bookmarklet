@@ -575,7 +575,7 @@ async function cloudinarySavings() {
       const r = d.results.get(rec.url);
       if (r && r.orig && r.cld) addMark(rec, r);
     });
-    place();
+    applyVisibility();   // honours the selection, so an auto-excluded domain draws nothing
     logDomain(d);
     render();
   }
@@ -753,9 +753,15 @@ async function cloudinarySavings() {
       return;
     }
 
+    const nothingIncluded = anyDone && t.n === 0;
     let html = '<div class="hdr"><div class="eyebrow">' +
-      (anyDone ? "Cloudinary would save" : "Analysing page") + '</div>' + closeBtn + '</div>';
-    if (anyDone) {
+      (nothingIncluded ? "Nothing included" : anyDone ? "Cloudinary would save" : "Analysing page") +
+      '</div>' + closeBtn + '</div>';
+    if (nothingIncluded) {
+      html += '<div class="big" style="font-size:20px">&mdash;</div>' +
+        '<div class="sub2">No domain is currently contributing to a total. Tick one below to ' +
+        'include it.</div>';
+    } else if (anyDone) {
       html += '<div class="big">' + t.pct.toFixed(1) + '%</div>' +
         '<div class="sub">' + ((t.orig - t.cld) / 1000).toFixed(1) + ' KB across ' + t.n + ' images</div>' +
         '<div class="sub2">' + (t.orig / 1000).toFixed(1) + ' KB &rarr; ' + (t.cld / 1000).toFixed(1) +
