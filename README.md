@@ -39,10 +39,35 @@ Three paths, best first. Diagnostics report which one each domain used.
    doesn't apply server-side, so this rescues hosts that block cross-origin reads entirely —
    `images.jackjones.com`, for example, goes from unmeasurable to 10/10.
 
-The caveat on path 3, surfaced in diagnostics: `input.bytes` reflects Cloudinary's own request,
-not the browser's. If such a host varied its response by `Accept`, the original could be a
-different format than you'd receive. In practice hosts that block CORS are static CDNs that don't
-negotiate; the ones that do negotiate (Scene7, imgix, Cloudinary) all send `access-control-allow-origin`.
+### Why path 3 is excluded from the headline by default
+
+Cloudinary's fetcher sends `Accept: */*`. Measured, `input.bytes` is *exactly* what the origin
+returns to `*/*` — so on a host that content-negotiates it reports a representation the browser
+would never receive:
+
+| host | negotiates? | browser receives | `fl_getinfo` reports |
+|---|---|---|---|
+| `asda.scene7.com` | yes | 196,669 | 333,437 — **+69%** |
+| `images.acer.com` | yes | 2,564 | 10,473 — **4×** |
+| `images.jackjones.com` | no | 399,503 | 399,503 ✓ |
+| `www.banyantree.com` | no | 849 | 849 ✓ |
+
+An inflated original inflates the saving, which is exactly the failure mode that makes a demo
+number indefensible. Across the hosts sampled, every one that blocked CORS also failed to
+negotiate — so the fallback is accurate precisely where it's needed — but that correlation is a
+pattern, not a guarantee, and it can't be tested at runtime from the browser.
+
+So domains measured this way are tagged `SERVER-SIDE`, left **unticked**, and kept out of the
+total until deliberately included; a caution appears in the panel itself, not just in diagnostics.
+Scene7-confirmed hosts never take this path at all. The console prints the check that settles it:
+
+```
+curl -sI -H 'Accept: image/avif,image/webp,*/*' '<url>' | grep -i content-length
+curl -sI -H 'Accept: */*'                       '<url>' | grep -i content-length
+```
+
+Equal lengths mean the figure is sound; different lengths mean that host negotiates and the
+server-side saving is overstated.
 
 ## Known limitation: origins that block Cloudinary
 
@@ -136,7 +161,7 @@ would overstate the win by roughly 7 points on Scene7 — 322 KB with a default 
 | `direct.asda.com` (George, strict CSP) | 16-of-29 rule correct, CSP violations captured, helper loads |
 | `www.acer.com` | 46/46 measured, 52.8% |
 | `www.ikea.com`, `en.wikipedia.org` | Confirmed `connect-src` blocks third-party fetch (helper needed) |
-| `images.jackjones.com` (no CORS) | 0/10 → **10/10 measured, 58.7%** via server-side `fl_getinfo` |
+| `images.jackjones.com` (no CORS) | 64 measured via `fl_getinfo`; excluded by default, 58.9% on opt-in |
 | `www.banyantree.com` (no CORS) | Originals readable via Resource Timing; Cloudinary blocked by origin WAF |
 
 ## Notes
