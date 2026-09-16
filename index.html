@@ -450,7 +450,7 @@ async function cloudinarySavings() {
         });
         layer.appendChild(badge);
       }
-      marks.push({ img, badge, tier, r, prevOutline, prevOffset, ringPx });
+      marks.push({ img, badge, tier, r, prevOutline, prevOffset, ringPx, enabled: true });
     });
   }
 
@@ -459,7 +459,10 @@ async function cloudinarySavings() {
       const b = m.img.getBoundingClientRect();
       const onScreen = b.width > 0 && b.height > 0 && b.bottom > -200 && b.top < innerHeight + 200;
       if (m.badge) {
-        if (!onScreen || !overlaysVisible) { m.badge.style.setProperty("display", "none", "important"); continue; }
+        if (!onScreen || !overlaysVisible || !m.enabled) {
+          m.badge.style.setProperty("display", "none", "important");
+          continue;
+        }
         const tier = tierFor(Math.round(b.width), Math.round(b.height));
         if (tier !== m.tier && tier !== "micro") {
           m.tier = tier;
@@ -665,7 +668,8 @@ async function cloudinarySavings() {
     allDomains.forEach(d => { if (d.selected) d.urls.forEach(rec => on.add(rec.url)); });
     marks.forEach(m => {
       const src = m.img.currentSrc || m.img.src;
-      const show = overlaysVisible && on.has(src);
+      m.enabled = on.has(src);
+      const show = overlaysVisible && m.enabled;
       if (m.badge) m.badge.style.setProperty("display", show ? "block" : "none", "important");
       if (show) important(m.img, { outline: m.ringPx + " solid " + GREEN, "outline-offset": "-" + m.ringPx });
       else {
