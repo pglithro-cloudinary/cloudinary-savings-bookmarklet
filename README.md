@@ -39,6 +39,24 @@ Three paths, best first. Diagnostics report which one each domain used.
    doesn't apply server-side, so this rescues hosts that block cross-origin reads entirely —
    `images.jackjones.com`, for example, goes from unmeasurable to 10/10.
 
+### Getting real browser headers on a CORS-blocked host
+
+Cloudinary's fetcher **cannot** be made to send chosen headers. Verified two ways: a URL
+Cloudinary had never fetched, requested with full Chrome-on-Windows headers, still came back as
+the `*/*` representation (333,437 bytes where Chrome receives 196,669); and the fetch
+documentation describes no parameter for it. Fetched sources are also cached for 7 days.
+
+`measure-worker.js` in this repo closes that gap. Deploy it and set `MEASURE_PROXY` in
+`helper.html`, and CORS-blocked hosts are measured with a fixed, current Chrome-on-Windows header
+set — the same numbers a real visitor gets, even on hosts that content-negotiate:
+
+```
+npx wrangler deploy measure-worker.js --name image-measure --compatibility-date 2026-01-01
+```
+
+With the proxy configured it is tried before the Cloudinary fallback, and those originals are
+labelled `proxy` rather than `cloudinary` — they carry no accuracy caveat.
+
 ### Why path 3 is excluded from the headline by default
 
 Cloudinary's fetcher sends `Accept: */*`. Measured, `input.bytes` is *exactly* what the origin
@@ -57,9 +75,10 @@ number indefensible. Across the hosts sampled, every one that blocked CORS also 
 negotiate — so the fallback is accurate precisely where it's needed — but that correlation is a
 pattern, not a guarantee, and it can't be tested at runtime from the browser.
 
-So domains measured this way are tagged `SERVER-SIDE`, left **unticked**, and kept out of the
-total until deliberately included; a caution appears in the panel itself, not just in diagnostics.
-Scene7-confirmed hosts never take this path at all. The console prints the check that settles it:
+So domains measured this way are tagged `SERVER-SIDE` and kept out of the total — **unless they
+are the only thing on the page that could be measured**, in which case they are included, because
+a flagged number beats no number. Either way a caution appears in the panel itself, not just in
+diagnostics, and Scene7-confirmed hosts never take this path at all. The console prints the check that settles it:
 
 ```
 curl -sI -H 'Accept: image/avif,image/webp,*/*' '<url>' | grep -i content-length
@@ -88,7 +107,9 @@ fetch delivery.
 Single-page-app route changes leave the document intact, which used to strand badges on images
 that had gone and totals describing the previous page. URL changes are now detected (via
 `pushState`/`replaceState`/`popstate`/`hashchange` plus a poll); overlays clear immediately and
-the panel offers a re-scan, with an opt-in "re-scan automatically" toggle. A close button unwinds
+the page is re-scanned automatically after a short settle delay. The "re-scan automatically"
+toggle is on by default and can be turned off for sites whose filters fire `pushState` on every
+facet click. A close button unwinds
 everything — overlays removed, outlines restored, listeners detached, `history` methods restored.
 Re-running the bookmarklet tears down any previous instance first, so panels can't stack.
 

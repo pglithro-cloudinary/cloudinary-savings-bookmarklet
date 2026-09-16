@@ -371,7 +371,7 @@ async function cloudinarySavings() {
   // Anything the page's CSP refuses fires this event, which is the single most useful
   // signal for working out why a run came back empty.
   let acceptUsed = null, acceptSource = null;
-  let autoRescan = window.__cldAutoRescan === true;
+  let autoRescan = window.__cldAutoRescan !== false;   // on by default
   let navigated = false, navTimer = 0;
   const csp = [], cspSeen = {};
   const onCsp = e => {
@@ -595,16 +595,14 @@ async function cloudinarySavings() {
     // Cloudinary's fetcher sends Accept: */*, so a server-side original is only correct for
     // hosts that don't vary by Accept. Measured examples of getting this wrong: Scene7 reports
     // 333KB server-side where a browser receives 197KB, and images.acer.com 10.5KB vs 2.6KB.
-    // Keep such figures out of the headline unless the user deliberately opts in.
     if ([...d.results.values()].some(r => r.orig && r.origSource === "cloudinary")) {
       d.serverSide = true;
-      if (!d.userForced) d.selected = false;
     }
     d.urls.forEach(rec => {
       const r = d.results.get(rec.url);
       if (r && r.orig && r.cld) addMark(rec, r);
     });
-    applyVisibility();   // honours the selection, so an auto-excluded domain draws nothing
+    reconcileServerSide();   // decides inclusion, then applies visibility
     logDomain(d);
     render();
   }
@@ -634,6 +632,19 @@ async function cloudinarySavings() {
         "the saving shown is overstated.");
     }
     console.groupEnd();
+  }
+
+  // A server-side figure is a worse measurement, but it beats showing nothing. Drop those
+  // domains from the headline only once some domain has produced browser-verified numbers;
+  // if server-side is all this page offers, include it and lean on the warning instead.
+  function reconcileServerSide() {
+    const verified = allDomains.some(d => d.state === "done" && !d.serverSide &&
+      [...d.results.values()].some(r => r.orig && r.cld));
+    allDomains.forEach(d => {
+      if (!d.serverSide || d.userForced) return;
+      d.selected = !verified;
+    });
+    applyVisibility();
   }
 
   // ---- Totals ---------------------------------------------------------------
@@ -847,7 +858,11 @@ async function cloudinarySavings() {
         ' could only be measured <b>server-side</b>, because the host refuses cross-origin reads. ' +
         'Cloudinary fetches those with <code>Accept: */*</code>, so the original is only right if ' +
         'the host doesn\'t vary by Accept &mdash; ' +
-        (ss.some(d => d.selected) ? 'included in the total above.' : 'left out of the total above.') +
+        (ss.some(d => d.selected)
+          ? (allDomains.some(d => d.selected && !d.serverSide)
+              ? 'included in the total above.'
+              : '<b>included, because nothing else on this page could be measured.</b>')
+          : 'left out of the total above.') +
         ' Verify before quoting: the console prints a two-line curl check.</div>';
     }
 
@@ -982,6 +997,7 @@ async function cloudinarySavings() {
     const SOURCE_LABEL = {
       browser: "measured by this browser (Resource Timing)",
       helper: "measured cross-origin by the helper",
+      proxy: "measured by the proxy with fixed Chrome-on-Windows headers",
       cloudinary: "measured server-side by Cloudinary (fl_getinfo)"
     };
     const sources = {};
@@ -1197,6 +1213,8 @@ async function cloudinarySavings() {
   for (const d of allDomains) {
     if (d.selected) await measureDomain(d);
   }
+  reconcileServerSide();
+  render();
 
   const t = totals();
   console.log("%cCloudinary savings%c  " + t.pct.toFixed(1) + "% across " + t.n + " images  (" +

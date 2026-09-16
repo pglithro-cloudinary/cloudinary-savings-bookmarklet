@@ -18,6 +18,11 @@ framing it grants no read access that the framing page didn't already have.
 <script>
 (function () {
   var CLOUDINARY_HOST = "res.cloudinary.com";
+
+  // Optional. Deploy measure-worker.js and put its URL here to measure CORS-blocked hosts with
+  // fixed Chrome-on-Windows headers instead of falling back to Cloudinary's Accept: */* fetch.
+  // See the "Request fairness" section of the README for why that matters.
+  var MEASURE_PROXY = "";
   var CONCURRENCY = 8;
   var DEFAULT_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
@@ -138,6 +143,21 @@ framing it grants no read access that the framing page didn't already have.
       var d = await diagnose(url);
       return { bytes: null, error: d.detail, reason: d.reason };
     }
+  }
+
+  // Preferred rescue for a host that refuses cross-origin reads: our own proxy, which fetches
+  // with a fixed current-Chrome-on-Windows header set, so the number reflects what a real
+  // visitor receives even when the host content-negotiates.
+  async function proxyMeasure(url) {
+    if (!MEASURE_PROXY) return null;
+    try {
+      var r = await fetch(MEASURE_PROXY + "?url=" + encodeURIComponent(url) +
+        "&referer=" + encodeURIComponent(document.referrer || ""), { cache: "no-store" });
+      if (!r.ok) return null;
+      var j = await r.json();
+      if (!j || !j.bytes) return null;
+      return { bytes: j.bytes, type: j.type, method: "proxy " + (j.method || "") };
+    } catch (e) { return null; }
   }
 
   // Last resort for hosts that refuse cross-origin reads: Cloudinary fetches the image
@@ -272,6 +292,16 @@ framing it grants no read access that the framing page didn't already have.
           cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error,
           cldStatus: pair[1].status, cldMethod: pair[1].method
         };
+
+        // Try our own proxy first: it sends real browser headers, so unlike the Cloudinary
+        // fallback it stays correct on hosts that content-negotiate.
+        if (!out.orig && MEASURE_PROXY) {
+          var px = await proxyMeasure(url);
+          if (px) {
+            out.orig = px.bytes; out.origType = px.type; out.origError = null;
+            out.origMethod = px.method; out.origSource = "proxy";
+          }
+        }
 
         // If the host wouldn't let us read it, let Cloudinary measure it server-side -- but not
         // for hosts the caller knows content-negotiate, where Cloudinary's Accept: */* fetch
