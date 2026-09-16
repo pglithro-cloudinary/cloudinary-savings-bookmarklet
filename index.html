@@ -426,13 +426,14 @@ async function cloudinarySavings() {
     if (tier === "small") {
       return '<div style="font-weight:800;font-size:15px;line-height:1.1;">&#8595; ' + Math.round(pct) + '%</div>';
     }
-    const fmt = (r.origType || "").replace("image/", "").split(";")[0] + " &rarr; " +
-                (r.cldType || "").replace("image/", "").split(";")[0];
+    const clean = t => (t || "").replace("image/", "").split(";")[0];
+    const fmt = r.origType && r.cldType ? clean(r.origType) + " &rarr; " + clean(r.cldType)
+      : r.cldType ? "&rarr; " + clean(r.cldType) : "";
     return '<div style="font-weight:800;font-size:19px;line-height:1.1;letter-spacing:-0.5px;">&#8595; ' + pct + '%</div>' +
       '<div style="font-size:12px;font-weight:700;margin-top:2px;">' + kb + ' KB saved</div>' +
       '<div style="font-size:10px;opacity:.9;margin-top:1px;">' + (r.orig / 1000).toFixed(1) +
         ' KB &rarr; ' + (r.cld / 1000).toFixed(1) + ' KB</div>' +
-      '<div style="font-size:9px;opacity:.8;margin-top:1px;">' + fmt + '</div>';
+      (fmt ? '<div style="font-size:9px;opacity:.8;margin-top:1px;">' + fmt + '</div>' : "");
   }
 
   const CHROME = {
@@ -523,13 +524,31 @@ async function cloudinarySavings() {
     });
   }
 
+  // Resource Timing reports encodedBodySize for same-origin resources, and for cross-origin
+  // ones that send Timing-Allow-Origin. Where it's available it's the best number we can get:
+  // the actual bytes this browser downloaded for its own <img> request. Hosts that block CORS
+  // are often the page's own origin, so this rescues exactly the cases the helper can't read.
+  function knownSizes(urls) {
+    const out = {};
+    urls.forEach(u => {
+      let best = 0;
+      try {
+        performance.getEntriesByName(u).forEach(e => {
+          if (e.entryType === "resource" && e.encodedBodySize > best) best = e.encodedBodySize;
+        });
+      } catch (e) {}
+      if (best > 0) out[u] = best;
+    });
+    return out;
+  }
+
   async function measureDomain(d) {
     if (d.state === "done" || d.state === "measuring") return;
     d.state = "measuring";
     render();
     const urls = d.urls.map(r => r.url);
-    const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix, accept },
-      "cld-results", 90000);
+    const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix,
+      accept, known: knownSizes(urls) }, "cld-results", 90000);
     const out = msg && msg.results;
     if (msg && msg.meta) { acceptUsed = msg.meta.accept; acceptSource = msg.meta.acceptSource; }
     if (!out) {
@@ -848,6 +867,35 @@ async function cloudinarySavings() {
       ? '<span class="bad">' + mismatch.join("<br>") + '</span>'
       : '<span class="ok">same HTTP method used on both sides throughout</span>');
 
+    const SOURCE_LABEL = {
+      browser: "measured by this browser (Resource Timing)",
+      helper: "measured cross-origin by the helper",
+      cloudinary: "measured server-side by Cloudinary (fl_getinfo)"
+    };
+    const sources = {};
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (!r || !r.orig || !r.cld) return;
+        const k = d.host + "|" + (r.origSource || "helper");
+        sources[k] = (sources[k] || 0) + 1;
+      });
+    });
+    const srcKeys = Object.keys(sources);
+    if (srcKeys.length) {
+      h += '<b>How originals were measured</b>';
+      h += srcKeys.map(k => {
+        const parts = k.split("|");
+        return parts[0] + " &mdash; " + sources[k] + "x " + (SOURCE_LABEL[parts[1]] || parts[1]);
+      }).join("<br>");
+      if (srcKeys.some(k => k.split("|")[1] === "cloudinary")) {
+        h += '<br><span class="bad">Server-side figures come from Cloudinary\'s own fetch, not from ' +
+          'this browser. If such a host varied its response by Accept the original could be a ' +
+          'different format than you would receive &mdash; though hosts that block CORS rarely negotiate.</span>';
+      }
+    }
+
     h += '<b>Measurement</b>';
     h += problems.length ? '<span class="bad">' + problems.join("<br>") + '</span>'
       : '<span class="ok">no failures on the measured domains</span>';
@@ -855,8 +903,9 @@ async function cloudinarySavings() {
     h += '<b>If a domain can\'t be measured</b>' +
       '1. <code>connect-src</code> in the CSP above blocks the page, not the helper &mdash; the helper ' +
       'sidesteps it, so this only matters if <code>frame-src</code> is also restricted.<br>' +
-      '2. "no access-control-allow-origin" means the image host refuses cross-origin reads. Nothing ' +
-      'client-side can fix that; measure it server-side instead.<br>' +
+      '2. "no access-control-allow-origin" now falls back automatically: same-origin images are read ' +
+      'from Resource Timing, and anything else is measured server-side by Cloudinary via ' +
+      '<code>fl_getinfo</code>. You only see this error if both of those failed too.<br>' +
       '3. A Cloudinary 401/403 means this cloud isn\'t allowed to fetch that domain &mdash; check ' +
       'Settings &gt; Security in the Cloudinary console.<br>' +
       '4. Full per-image detail is in the browser console.';

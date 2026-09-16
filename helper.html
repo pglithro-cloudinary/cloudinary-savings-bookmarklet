@@ -132,6 +132,28 @@ framing it grants no read access that the framing page didn't already have.
     }
   }
 
+  // Last resort for hosts that refuse cross-origin reads: Cloudinary fetches the image
+  // server-side, where CORS doesn't apply, and fl_getinfo reports both the bytes it pulled
+  // and the bytes it would serve back. The output side still honours our Accept header.
+  async function getInfo(url, accept, prefix) {
+    if (!prefix) return null;
+    var m = prefix.match(/^(https:\/\/res\.cloudinary\.com\/[^\/]+\/image\/fetch\/)(.*)\/$/);
+    if (!m) return null;
+    var transform = m[2] ? m[2] + ",fl_getinfo" : "fl_getinfo";
+    try {
+      var r = await fetch(m[1] + transform + "/" + encodeURIComponent(url),
+        { headers: { "Accept": accept }, cache: "no-store" });
+      if (!r.ok) return { error: explainStatus(r.status, true) };
+      var j = await r.json();
+      if (!j || !j.input) return null;
+      return {
+        orig: j.input.bytes || null,
+        cld: j.output ? j.output.bytes || null : null,
+        cldType: j.output && j.output.format ? "image/" + j.output.format : null
+      };
+    } catch (e) { return null; }
+  }
+
   // Optional enrichment: is this host actually Adobe Scene7 / Dynamic Media?
   async function scene7Check(sampleUrl) {
     try {
@@ -170,21 +192,48 @@ framing it grants no read access that the framing page didn't already have.
       var prefix = typeof msg.prefix === "string" &&
         msg.prefix.indexOf("https://" + CLOUDINARY_HOST + "/") === 0 ? msg.prefix : null;
 
+      var known = msg.known && typeof msg.known === "object" ? msg.known : {};
+
       var results = await pool(msg.urls.slice(0, 400), CONCURRENCY, async function (url) {
         if (!/^https?:\/\//i.test(url)) return { url: url, origError: "not an http(s) URL" };
         var cldUrl = prefix ? prefix + encodeURIComponent(url) : null;
+
+        // Best case: the page already measured this one from its own Resource Timing entry,
+        // which is the real number of bytes this browser downloaded for its own <img> request.
+        var pre = known[url] > 0 ? { bytes: known[url], method: "resource-timing" } : null;
+
         // Same Accept header on both sides, so we compare like with like.
         var pair = await Promise.all([
-          sizeOf(url, accept, false),
+          pre ? Promise.resolve(pre) : sizeOf(url, accept, false),
           cldUrl ? sizeOf(cldUrl, accept, true) : Promise.resolve({ bytes: null, error: "no prefix" })
         ]);
-        return {
+
+        var out = {
           url: url, cldUrl: cldUrl,
           orig: pair[0].bytes, origType: pair[0].type, origError: pair[0].error,
           origReason: pair[0].reason, origMethod: pair[0].method,
+          origSource: pre ? "browser" : "helper",
           cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error,
           cldStatus: pair[1].status, cldMethod: pair[1].method
         };
+
+        // If the host wouldn't let us read it, let Cloudinary measure it server-side.
+        if (!out.orig || !out.cld) {
+          var gi = await getInfo(url, accept, prefix);
+          if (gi && !gi.error) {
+            if (!out.orig && gi.orig) {
+              out.orig = gi.orig; out.origSource = "cloudinary"; out.origError = null;
+              out.origMethod = "fl_getinfo";
+            }
+            if (!out.cld && gi.cld) {
+              out.cld = gi.cld; out.cldType = out.cldType || gi.cldType;
+              out.cldError = null; out.cldMethod = "fl_getinfo";
+            }
+          } else if (gi && gi.error && !out.orig) {
+            out.origError = out.origError + " Cloudinary server-side fallback also failed: " + gi.error;
+          }
+        }
+        return out;
       });
       ev.source.postMessage({
         type: "cld-results", id: msg.id, results: results,
