@@ -458,8 +458,23 @@ async function cloudinarySavings() {
   });
   document.documentElement.appendChild(layer);
 
-  const marks = [];     // { rec, badge, tier, ring }
+  const marks = [];     // { img, badge, tier, r, visible, enabled, ... }
   let overlaysVisible = true;
+
+  // IntersectionObserver computes intersection through the containing-block chain, so it
+  // accounts for a carousel clipping its off-screen slides with overflow:hidden — something
+  // a plain viewport check misses entirely.
+  const markByImg = new WeakMap();
+  const io = new IntersectionObserver(entries => {
+    let changed = false;
+    entries.forEach(en => {
+      const m = markByImg.get(en.target);
+      if (!m) return;
+      const vis = en.isIntersecting && en.intersectionRatio > 0;
+      if (m.visible !== vis) { m.visible = vis; changed = true; }
+    });
+    if (changed) place();
+  }, { root: null, threshold: [0, 0.01] });
 
   function tierFor(w, h) {
     if (w < 45 || h < 45) return "micro";
@@ -516,19 +531,31 @@ async function cloudinarySavings() {
         });
         layer.appendChild(badge);
       }
-      marks.push({ img, badge, tier, r, prevOutline, prevOffset, ringPx, enabled: true });
+      const mark = { img, badge, tier, r, prevOutline, prevOffset, ringPx, enabled: true, visible: false };
+      marks.push(mark);
+      markByImg.set(img, mark);
+      io.observe(img);
+      startTracking();
     });
   }
 
   function place() {
     for (const m of marks) {
+      if (!m.badge) continue;
+      if (!overlaysVisible || !m.enabled || !m.visible) {
+        m.badge.style.setProperty("display", "none", "important");
+        continue;
+      }
       const b = m.img.getBoundingClientRect();
-      const onScreen = b.width > 0 && b.height > 0 && b.bottom > -200 && b.top < innerHeight + 200;
-      if (m.badge) {
-        if (!onScreen || !overlaysVisible || !m.enabled) {
-          m.badge.style.setProperty("display", "none", "important");
-          continue;
-        }
+      // Belt and braces: zero-sized, or hidden by CSS the observer can't see.
+      const shown = b.width > 0 && b.height > 0 &&
+        (typeof m.img.checkVisibility !== "function" ||
+         m.img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      if (!shown) {
+        m.badge.style.setProperty("display", "none", "important");
+        continue;
+      }
+      {
         const tier = tierFor(Math.round(b.width), Math.round(b.height));
         if (tier !== m.tier && tier !== "micro") {
           m.tier = tier;
@@ -546,9 +573,17 @@ async function cloudinarySavings() {
     }
   }
 
-  let raf = 0;
-  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
-  addEventListener("scroll", schedule, { passive: true, capture: true });
+  // Carousels commonly move with a CSS transform, which fires no scroll event, so badges have
+  // to be repositioned on every frame rather than only when something scrolls. Only visible
+  // marks are measured, so this stays cheap.
+  let rafId = 0, tracking = false;
+  function trackFrame() { if (!tracking) return; place(); rafId = requestAnimationFrame(trackFrame); }
+  function startTracking() { if (!tracking && !document.hidden) { tracking = true; rafId = requestAnimationFrame(trackFrame); } }
+  function stopTracking() { tracking = false; if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
+  const onVisibility = () => { if (document.hidden) stopTracking(); else startTracking(); };
+  document.addEventListener("visibilitychange", onVisibility);
+
+  const schedule = () => { if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; place(); }); };
   addEventListener("resize", schedule, { passive: true });
 
   // ---- Helper iframe --------------------------------------------------------
@@ -594,10 +629,13 @@ async function cloudinarySavings() {
   }
 
   async function measureDomain(d) {
-    if (d.state === "done" || d.state === "measuring") return;
+    if (d.state === "measuring") return;
+    if (!d.results) d.results = new Map();
+    // Only ever measure what we haven't already, so a rescan costs one request per new image.
+    const urls = d.urls.map(r => r.url).filter(u => !d.results.has(u));
+    if (!urls.length) { if (d.state !== "done") { d.state = "done"; render(); } return; }
     d.state = "measuring";
     render();
-    const urls = d.urls.map(r => r.url);
     // Scene7 always negotiates on Accept, so a server-side original would be wrong by design.
     const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix,
       accept, known: knownSizes(urls), allowServerSide: !d.scene7 }, "cld-results", 90000);
@@ -611,7 +649,7 @@ async function cloudinarySavings() {
       render();
       return;
     }
-    d.results = new Map(out.map(r => [r.url, r]));
+    out.forEach(r => d.results.set(r.url, r));
     d.state = "done";
 
     // Cloudinary's fetcher sends Accept: */*, so a server-side original is only correct for
@@ -621,8 +659,9 @@ async function cloudinarySavings() {
       d.serverSide = true;
     }
     d.urls.forEach(rec => {
+      if (rec.marked) return;
       const r = d.results.get(rec.url);
-      if (r && r.orig && r.cld) addMark(rec, r);
+      if (r && r.orig && r.cld) { rec.marked = true; addMark(rec, r); }
     });
     reconcileServerSide();   // decides inclusion, then applies visibility
     logDomain(d);
@@ -692,6 +731,70 @@ async function cloudinarySavings() {
     return { orig, cld, n, failed, pct: orig ? (1 - cld / orig) * 100 : 0 };
   }
 
+  // ---- Rescan as the page reveals more images -------------------------------
+  // Scrolling a long listing loads more imagery, so pick it up without making the user click
+  // anything. Only genuinely new URLs are measured, and existing badges are left alone.
+  let scanTimer = 0, scanning = false, foundSinceStart = 0;
+  function scheduleScan() {
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(incrementalScan, 700);   // after scrolling settles
+  }
+
+  async function incrementalScan() {
+    if (scanning || navigated) return;
+    scanning = true;
+    try {
+      // Nudge any native lazy images that have come into play.
+      Array.from(document.images)
+        .filter(i => !i.complete && i.loading === "lazy" && /^https?:/i.test(i.currentSrc || i.src))
+        .forEach(i => { try { i.loading = "eager"; } catch (e) {} });
+
+      let added = 0;
+      Array.from(document.images).forEach(img => {
+        const src = img.currentSrc || img.src;
+        if (!src || !/^https?:/i.test(src)) return;
+        let host;
+        try { host = new URL(src).host.toLowerCase(); } catch (e) { return; }
+        const box = img.getBoundingClientRect();
+        const w = Math.round(box.width || img.width || 0);
+        const h = Math.round(box.height || img.height || 0);
+
+        let rec = byUrl.get(src);
+        if (!rec) {
+          rec = { url: src, host, w, h, natW: img.naturalWidth || 0, natH: img.naturalHeight || 0, els: [] };
+          byUrl.set(src, rec);
+          let d = domains.get(host);
+          if (!d) {
+            d = { host, urls: [], big: 0, total: 0, sample: src, scene7: false,
+                  state: "idle", results: null, selected: false };
+            domains.set(host, d);
+            allDomains.push(d);
+          }
+          d.urls.push(rec);
+          d.total++;
+          if (w >= THUMB && h >= THUMB) d.big++;
+          if (d.state === "idle" && !d.userForced && d.big >= MIN_BIG) d.selected = true;
+          added++;
+        }
+        if (w * h > rec.w * rec.h) { rec.w = w; rec.h = h; }
+        if (rec.els.indexOf(img) === -1) rec.els.push(img);
+      });
+
+      if (!added) return;
+      foundSinceStart += added;
+      render();
+      for (const d of allDomains) {
+        if (d.selected) await measureDomain(d);
+      }
+      reconcileServerSide();
+      render();
+    } finally {
+      scanning = false;
+    }
+  }
+
+  addEventListener("scroll", scheduleScan, { passive: true, capture: true });
+
   // ---- Navigation handling --------------------------------------------------
   // On a single-page-app route change the document survives, so without this the badges
   // stay pinned to images that have gone and the totals describe the previous page.
@@ -725,12 +828,16 @@ async function cloudinarySavings() {
 
   function teardown() {
     clearTimeout(navTimer);
+    clearTimeout(scanTimer);
+    removeEventListener("scroll", scheduleScan, { passive: true, capture: true });
     clearInterval(urlPoll);
+    stopTracking();
+    io.disconnect();
+    document.removeEventListener("visibilitychange", onVisibility);
     clearMarks();
     if (layer) layer.remove();
     if (host) host.remove();
     if (frame) frame.remove();
-    removeEventListener("scroll", schedule, { passive: true, capture: true });
     removeEventListener("resize", schedule, { passive: true });
     removeEventListener("popstate", onNav);
     removeEventListener("hashchange", onNav);
