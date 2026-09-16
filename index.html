@@ -338,7 +338,9 @@ async function cloudinarySavings() {
     for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
     return h.toString(16).padStart(8, "0");
   };
-  const BUILD = VERSION + " \u00b7 build " + fingerprint(cloudinarySavings.toString());
+  const MY_FP = fingerprint(cloudinarySavings.toString());
+  const BUILD = VERSION + " \u00b7 build " + MY_FP;
+  const INSTALL_URL = "https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/";
 
   // Clicking the bookmarklet twice, or re-scanning after navigation, must not stack instances.
   if (typeof window.__cldSavingsTeardown === "function") {
@@ -743,6 +745,10 @@ async function cloudinarySavings() {
     '.tag{display:inline-block;font-size:8px;letter-spacing:.06em;background:rgba(255,255,255,.28);' +
       'border-radius:3px;padding:1px 4px;margin-left:4px;vertical-align:1px}' +
     '.tag.warn{background:rgba(0,0,0,.42)}' +
+    '.update{background:#ffd54a;color:#3a2c00;border-radius:8px;padding:8px 10px;margin:0 0 10px;' +
+      'font:600 10.5px/1.45 system-ui,sans-serif;text-shadow:none}' +
+    '.update a{color:#3a2c00;font-weight:800}' +
+    '.update code{background:rgba(0,0,0,.12);color:#3a2c00}' +
     '.warnbox{margin-top:10px;background:rgba(0,0,0,.3);border-radius:8px;padding:9px 10px;' +
       'font-size:10.5px;line-height:1.45;text-shadow:none}' +
     '.warnbox b{font-weight:800}' +
@@ -759,7 +765,7 @@ async function cloudinarySavings() {
   const panel = root.querySelector(".p");
   document.documentElement.appendChild(host);
 
-  let showAdv = false, logoData = null, logoPending = false;
+  let showAdv = false, logoData = null, logoPending = false, updateInfo = null, updateChecked = false;
 
   function render() {
     const t = totals();
@@ -768,12 +774,19 @@ async function cloudinarySavings() {
 
     const closeBtn = '<img class="logo" id="lg" src="' + LOGO + '" alt="Cloudinary">' +
       '<button class="x" id="cl" title="Close">&times;</button>';
+    const updateBanner = updateInfo
+      ? '<div class="update">Out of date &mdash; you are running build <code>' + MY_FP +
+        '</code>, the current one is <code>' + updateInfo.build + '</code>' +
+        (updateInfo.version ? ' (v' + updateInfo.version + ')' : "") + '. ' +
+        '<a href="' + INSTALL_URL + '" target="_blank" rel="noopener">Open the install page</a> and ' +
+        'drag the button again.</div>'
+      : "";
     const autoBox = '<label class="auto"><input type="checkbox" id="ar"' + (autoRescan ? " checked" : "") +
       '> Re-scan automatically when the page changes</label>';
 
     if (navigated) {
       panel.innerHTML =
-        '<div class="hdr">' + closeBtn + '</div><div class="eyebrow">Page changed</div>' +
+        '<div class="hdr">' + closeBtn + '</div>' + updateBanner + '<div class="eyebrow">Page changed</div>' +
         '<div class="big" style="font-size:20px">Results cleared</div>' +
         '<div class="sub2">This page navigated to a new URL, so the previous measurements no longer ' +
         'describe what you are looking at.</div>' +
@@ -783,7 +796,7 @@ async function cloudinarySavings() {
     }
 
     const nothingIncluded = anyDone && t.n === 0;
-    let html = '<div class="hdr">' + closeBtn + '</div><div class="eyebrow">' +
+    let html = '<div class="hdr">' + closeBtn + '</div>' + updateBanner + '<div class="eyebrow">' +
       (nothingIncluded ? "Nothing included" : anyDone ? "would save" : "Analysing page") + '</div>';
     if (nothingIncluded) {
       html += '<div class="big" style="font-size:20px">&mdash;</div>' +
@@ -914,8 +927,12 @@ async function cloudinarySavings() {
     let h = '<div class="diag">';
 
     h += '<b>Version</b>';
-    h += '<span class="ok">' + BUILD + '</span><br>' +
-      'Compare with the install page; if the build differs, re-drag the bookmarklet.';
+    h += '<span class="' + (updateInfo ? "bad" : "ok") + '">' + BUILD + '</span><br>' +
+      (updateInfo
+        ? 'Out of date. Current published build is <code>' + updateInfo.build + '</code>.'
+        : updateChecked
+          ? 'This is the current published build.'
+          : 'Checking against the published build&hellip;');
 
     h += '<b>Helper</b>';
     h += helperFailed ? '<span class="bad">' + helperFailed + '</span>'
@@ -1013,7 +1030,9 @@ async function cloudinarySavings() {
     const t = totals();
     const L = [];
     L.push("Cloudinary savings — diagnostics");
-    L.push("Version:   " + BUILD);
+    L.push("Version:   " + BUILD +
+      (updateInfo ? "  *** OUT OF DATE - current is " + updateInfo.build + " ***"
+        : updateChecked ? "  (current)" : ""));
     L.push("Page:      " + location.href);
     L.push("When:      " + new Date().toISOString());
     L.push("Transform: " + TRANSFORM);
@@ -1145,6 +1164,19 @@ async function cloudinarySavings() {
 
   // ---- Go -------------------------------------------------------------------
   render();
+
+  // Ask the helper what the published build is. Non-blocking; silent if it can't be reached.
+  talk({ type: "cld-version", id: 99 }, "cld-version-result", 25000).then(msg => {
+    if (!msg || !msg.info || !msg.info.build) return;
+    updateChecked = true;
+    if (msg.info.build !== MY_FP) {
+      updateInfo = msg.info;
+      console.warn("%cThis bookmarklet is out of date.%c\n  installed build " + MY_FP +
+        "\n  published build " + msg.info.build +
+        "\n  re-drag from " + INSTALL_URL, "font-weight:700;color:#b26a00", "");
+    }
+    render();
+  });
 
   // Label any Scene7 hosts, purely cosmetic, and don't let it hold up measurement.
   const s7Candidates = allDomains.filter(d =>

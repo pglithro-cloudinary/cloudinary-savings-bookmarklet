@@ -184,6 +184,33 @@ framing it grants no read access that the framing page didn't already have.
     var msg = ev.data;
     if (!msg || !ev.source) return;
 
+    // Report the payload currently published here, so a running bookmarklet can tell whether
+    // the copy in someone's bookmarks bar has fallen behind.
+    if (msg.type === "cld-version") {
+      var info = { version: null, build: null };
+      try {
+        var vr = await fetch("index.html", { cache: "no-store" });
+        if (vr.ok) {
+          var vhtml = await vr.text();
+          var va = vhtml.indexOf("async function cloudinarySavings() {");
+          var vb = vhtml.indexOf("// ---- Wire it into the page ----");
+          if (va > -1 && vb > va) {
+            var vsrc = vhtml.slice(va, vb).trim();
+            var h = 0x811c9dc5;
+            for (var i = 0; i < vsrc.length; i++) {
+              h ^= vsrc.charCodeAt(i);
+              h = Math.imul(h, 0x01000193) >>> 0;
+            }
+            info.build = h.toString(16).padStart(8, "0");
+            var vm = vsrc.match(/const VERSION = "([^"]+)"/);
+            info.version = vm ? vm[1] : null;
+          }
+        }
+      } catch (e) {}
+      ev.source.postMessage({ type: "cld-version-result", id: msg.id, info: info }, ev.origin);
+      return;
+    }
+
     // Fetch a Cloudinary asset as a data: URI, for pages whose img-src won't load it directly.
     if (msg.type === "cld-asset" && typeof msg.url === "string") {
       var dataUrl = null;
