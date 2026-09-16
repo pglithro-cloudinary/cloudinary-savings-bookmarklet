@@ -461,6 +461,29 @@ async function cloudinarySavings() {
   const marks = [];     // { img, badge, tier, r, visible, enabled, ... }
   let overlaysVisible = true;
 
+  // A dashed ring goes on the moment an image is queued, so it's obvious which images are
+  // being checked while the measuring happens in the background. It's replaced by the solid
+  // ring and a badge when the numbers land, or removed if the image couldn't be measured.
+  const pendingOutlines = new Map();
+  function markPending(img) {
+    if (pendingOutlines.has(img) || markByImg.has(img)) return;
+    pendingOutlines.set(img, { outline: img.style.outline, offset: img.style.outlineOffset });
+    important(img, { outline: "2px dashed " + GREEN, "outline-offset": "-2px" });
+  }
+  function clearPending(img) {
+    const p = pendingOutlines.get(img);
+    if (!p) return;
+    pendingOutlines.delete(img);
+    img.style.removeProperty("outline");
+    img.style.removeProperty("outline-offset");
+    if (p.outline) img.style.outline = p.outline;
+    if (p.offset) img.style.outlineOffset = p.offset;
+  }
+  function clearAllPending() { Array.from(pendingOutlines.keys()).forEach(clearPending); }
+  function pendDomain(d) {
+    d.urls.forEach(rec => rec.els.forEach(markPending));
+  }
+
   // IntersectionObserver computes intersection through the containing-block chain, so it
   // accounts for a carousel clipping its off-screen slides with overflow:hidden — something
   // a plain viewport check misses entirely.
@@ -541,7 +564,10 @@ async function cloudinarySavings() {
     rec.els.forEach(img => {
       const box = img.getBoundingClientRect();
       const tier = tierFor(Math.round(box.width), Math.round(box.height));
-      const prevOutline = img.style.outline, prevOffset = img.style.outlineOffset;
+      const pend = pendingOutlines.get(img);
+      const prevOutline = pend ? pend.outline : img.style.outline;
+      const prevOffset = pend ? pend.offset : img.style.outlineOffset;
+      if (pend) pendingOutlines.delete(img);   // superseded by the solid ring below
       const ringPx = tier === "micro" ? "2px" : CHROME[tier].ring;
       important(img, { outline: ringPx + " solid " + GREEN, "outline-offset": "-" + ringPx });
 
@@ -661,6 +687,7 @@ async function cloudinarySavings() {
     const urls = d.urls.map(r => r.url).filter(u => !d.results.has(u));
     if (!urls.length) { if (d.state !== "done") { d.state = "done"; render(); } return; }
     d.state = "measuring";
+    pendDomain(d);
     render();
     // Scene7 always negotiates on Accept, so a server-side original would be wrong by design.
     const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix,
@@ -669,6 +696,7 @@ async function cloudinarySavings() {
     if (msg && msg.meta) { acceptUsed = msg.meta.accept; acceptSource = msg.meta.acceptSource; }
     if (!out) {
       d.state = "failed";
+      d.urls.forEach(rec => rec.els.forEach(clearPending));
       helperFailed = helperFailed || (csp.some(c => /frame-src|child-src|default-src/.test(c.directive))
         ? "The page's CSP blocked the helper iframe (frame-src)."
         : "No response from the helper within 90s.");
@@ -688,6 +716,7 @@ async function cloudinarySavings() {
       if (rec.marked) return;
       const r = d.results.get(rec.url);
       if (r && r.orig && r.cld) { rec.marked = true; addMark(rec, r); }
+      else rec.els.forEach(clearPending);   // couldn't be measured, so drop its ring
     });
     reconcileServerSide();   // decides inclusion, then applies visibility
     logDomain(d);
@@ -825,6 +854,7 @@ async function cloudinarySavings() {
   // On a single-page-app route change the document survives, so without this the badges
   // stay pinned to images that have gone and the totals describe the previous page.
   function clearMarks() {
+    clearAllPending();
     marks.forEach(m => {
       if (m.badge) m.badge.remove();
       m.img.style.removeProperty("outline");
@@ -1084,6 +1114,11 @@ async function cloudinarySavings() {
   function applyVisibility() {
     const on = new Set();
     allDomains.forEach(d => { if (d.selected) d.urls.forEach(rec => on.add(rec.url)); });
+    // Pending rings follow the same rules: gone if overlays are off or the domain was unticked.
+    Array.from(pendingOutlines.keys()).forEach(img => {
+      const src = img.currentSrc || img.src;
+      if (!overlaysVisible || !on.has(src)) clearPending(img);
+    });
     marks.forEach(m => {
       const src = m.img.currentSrc || m.img.src;
       m.enabled = on.has(src);
@@ -1382,6 +1417,10 @@ async function cloudinarySavings() {
         render();
       });
   }
+
+  // Ring everything that's about to be checked before the first request goes out, so the page
+  // shows what's happening rather than sitting still for the length of the round trip.
+  allDomains.forEach(d => { if (d.selected) pendDomain(d); });
 
   for (const d of allDomains) {
     if (d.selected) await measureDomain(d);
