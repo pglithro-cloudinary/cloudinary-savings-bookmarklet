@@ -581,7 +581,9 @@ async function cloudinarySavings() {
       (r.cld / 1000).toFixed(2) + " KB (" + (r.cldType || "?") + ")  saved " +
       ((1 - r.cld / r.orig) * 100).toFixed(1) + "%"));
     rows.filter(r => !r.orig || !r.cld).forEach(r => console.warn(
-      r.url + "\n  original: " + (r.origError || "ok") + "\n  cloudinary: " + (r.cldError || "ok")));
+      r.url + "\n  original: " + (r.origError || "ok") + "\n  cloudinary: " + (r.cldError || "ok") +
+      (r.cldError && r.cldUrl ? "\n  to see Cloudinary's own reason:\n    curl -sI '" + r.cldUrl +
+        "' | grep -i x-cld-error" : "")));
     console.groupEnd();
   }
 
@@ -907,7 +909,9 @@ async function cloudinarySavings() {
       'from Resource Timing, and anything else is measured server-side by Cloudinary via ' +
       '<code>fl_getinfo</code>. You only see this error if both of those failed too.<br>' +
       '3. A Cloudinary 401/403 means this cloud isn\'t allowed to fetch that domain &mdash; check ' +
-      'Settings &gt; Security in the Cloudinary console.<br>' +
+      'Settings &gt; Security in the Cloudinary console. A Cloudinary 400 usually means the ' +
+      'origin blocked Cloudinary\'s fetcher; the console prints a curl command that reveals the ' +
+      'exact reason.<br>' +
       '4. Full per-image detail is in the browser console.';
 
     h += '</div>';

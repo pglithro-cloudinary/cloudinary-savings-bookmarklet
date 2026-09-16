@@ -77,7 +77,15 @@ framing it grants no read access that the framing page didn't already have.
         "Settings > Security > Restricted media types / Allowed fetch domains.";
     }
     if (status === 404) return "HTTP 404 - Cloudinary could not retrieve the source URL";
-    if (status === 400) return "HTTP 400 - Cloudinary rejected the URL as malformed";
+    if (status === 400) {
+      // Cloudinary's fetch failures come back as 400 with the real cause in x-cld-error,
+      // which isn't CORS-exposed, so we can't read it from the browser. In practice this is
+      // almost always the origin refusing Cloudinary's fetcher rather than a bad URL.
+      return "HTTP 400 - Cloudinary could not load the source image. Usually the origin refuses " +
+        "Cloudinary's fetcher (bot protection or a WAF answering 403), or the URL isn't publicly " +
+        "reachable. The exact reason is in Cloudinary's x-cld-error header, which browsers can't " +
+        "read cross-origin - see the console for a curl command that will show it.";
+    }
     if (status === 420 || status === 429) return "HTTP " + status + " - Cloudinary rate limit reached";
     return "HTTP " + status;
   }
