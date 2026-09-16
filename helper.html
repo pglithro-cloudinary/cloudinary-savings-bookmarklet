@@ -21,6 +21,50 @@ framing it grants no read access that the framing page didn't already have.
   var CONCURRENCY = 8;
   var DEFAULT_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
+  // The Accept header decides which format a CDN hands back, so both sides of the
+  // comparison must send the same one - and ideally the exact one this browser uses for
+  // <img> requests, rather than a guess from the UA string. A service worker can observe
+  // that header on a real image request, so we probe once and reuse the answer.
+  var acceptProbe = null;
+  function realAccept() {
+    if (acceptProbe) return acceptProbe;
+    acceptProbe = (async function () {
+      if (!("serviceWorker" in navigator) || !isSecureContext) return null;
+      try {
+        await navigator.serviceWorker.register("sw.js", { scope: "./" });
+        await navigator.serviceWorker.ready;
+        if (!navigator.serviceWorker.controller) {
+          await new Promise(function (res) {
+            var t = setTimeout(res, 2500);
+            navigator.serviceWorker.addEventListener("controllerchange", function () {
+              clearTimeout(t); res();
+            }, { once: true });
+          });
+        }
+        if (!navigator.serviceWorker.controller) return null;
+        return await new Promise(function (res) {
+          var done = false;
+          var finish = function (v) {
+            if (done) return;
+            done = true;
+            navigator.serviceWorker.removeEventListener("message", onMsg);
+            res(v);
+          };
+          function onMsg(ev) {
+            if (ev.data && ev.data.type === "cld-accept-probe" && ev.data.dest === "image") {
+              finish(ev.data.accept || null);
+            }
+          }
+          navigator.serviceWorker.addEventListener("message", onMsg);
+          setTimeout(function () { finish(null); }, 5000);
+          var probe = new Image();
+          probe.src = "accept-probe.gif?p=" + Date.now() + "-" + Math.random();
+        });
+      } catch (e) { return null; }
+    })();
+    return acceptProbe;
+  }
+
   function explainStatus(status, isCloudinary) {
     if (!isCloudinary) {
       if (status === 403) return "HTTP 403 - origin refused the request (hotlink protection or WAF)";
@@ -119,7 +163,10 @@ framing it grants no read access that the framing page didn't already have.
     }
 
     if (msg.type === "cld-measure" && Array.isArray(msg.urls)) {
-      var accept = typeof msg.accept === "string" ? msg.accept : DEFAULT_ACCEPT;
+      var probed = await realAccept();
+      var accept = probed || (typeof msg.accept === "string" ? msg.accept : DEFAULT_ACCEPT);
+      var acceptSource = probed ? "read from this browser's own <img> request via service worker"
+                                : "service worker unavailable - fell back to the UA-derived string";
       var prefix = typeof msg.prefix === "string" &&
         msg.prefix.indexOf("https://" + CLOUDINARY_HOST + "/") === 0 ? msg.prefix : null;
 
@@ -136,10 +183,13 @@ framing it grants no read access that the framing page didn't already have.
           orig: pair[0].bytes, origType: pair[0].type, origError: pair[0].error,
           origReason: pair[0].reason, origMethod: pair[0].method,
           cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error,
-          cldStatus: pair[1].status
+          cldStatus: pair[1].status, cldMethod: pair[1].method
         };
       });
-      ev.source.postMessage({ type: "cld-results", id: msg.id, results: results }, ev.origin);
+      ev.source.postMessage({
+        type: "cld-results", id: msg.id, results: results,
+        meta: { accept: accept, acceptSource: acceptSource }
+      }, ev.origin);
     }
   });
 

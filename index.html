@@ -330,6 +330,7 @@ async function cloudinarySavings() {
   // ---- Blocking diagnostics -------------------------------------------------
   // Anything the page's CSP refuses fires this event, which is the single most useful
   // signal for working out why a run came back empty.
+  let acceptUsed = null, acceptSource = null;
   const csp = [], cspSeen = {};
   const onCsp = e => {
     const key = e.violatedDirective + "|" + e.blockedURI;
@@ -494,7 +495,7 @@ async function cloudinarySavings() {
       function h(ev) {
         if (ev.origin !== HELPER_ORIGIN || !ev.data) return;
         if (ev.data.type === "cld-helper-ready") { helperReady = true; frame.contentWindow.postMessage(request, HELPER_ORIGIN); }
-        else if (ev.data.type === expect) finish(ev.data.results);
+        else if (ev.data.type === expect) finish(ev.data);
       }
       addEventListener("message", h);
       setTimeout(() => finish(null), timeoutMs);
@@ -514,8 +515,10 @@ async function cloudinarySavings() {
     d.state = "measuring";
     render();
     const urls = d.urls.map(r => r.url);
-    const out = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix, accept },
+    const msg = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix, accept },
       "cld-results", 90000);
+    const out = msg && msg.results;
+    if (msg && msg.meta) { acceptUsed = msg.meta.accept; acceptSource = msg.meta.acceptSource; }
     if (!out) {
       d.state = "failed";
       helperFailed = helperFailed || (csp.some(c => /frame-src|child-src|default-src/.test(c.directive))
@@ -706,6 +709,26 @@ async function cloudinarySavings() {
       });
       Object.keys(counts).forEach(k => problems.push(d.host + " &mdash; " + counts[k] + "x " + k));
     });
+    h += '<b>Request fairness</b>';
+    h += 'Both sides are requested by the same code path, from the same origin, with no cookies ' +
+      'and identical browser headers. The only header set explicitly is <code>Accept</code>:<br>' +
+      '<code>' + (acceptUsed || accept).replace(/</g, "&lt;") + '</code><br>' +
+      (acceptSource ? '<span class="' + (acceptSource.indexOf("read from") === 0 ? "ok" : "bad") + '">' +
+        acceptSource + '</span>' : "not measured yet");
+    const mismatch = [];
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      let n = 0;
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (r && r.orig && r.cld && r.origMethod && r.cldMethod && r.origMethod !== r.cldMethod) n++;
+      });
+      if (n) mismatch.push(d.host + " &mdash; " + n + " image(s) measured by different methods");
+    });
+    h += '<br>' + (mismatch.length
+      ? '<span class="bad">' + mismatch.join("<br>") + '</span>'
+      : '<span class="ok">same HTTP method used on both sides throughout</span>');
+
     h += '<b>Measurement</b>';
     h += problems.length ? '<span class="bad">' + problems.join("<br>") + '</span>'
       : '<span class="ok">no failures on the measured domains</span>';
@@ -731,9 +754,9 @@ async function cloudinarySavings() {
     /\.scene7\.com$/.test(d.host) || /\/is\/(image|content)\//i.test(d.sample));
   if (s7Candidates.length) {
     talk({ type: "cld-scene7", id: 1, samples: s7Candidates.map(d => ({ host: d.host, sample: d.sample })) },
-      "cld-scene7-result", 20000).then(res => {
-        if (!res) return;
-        res.forEach(x => { const d = domains.get(x.host); if (d && x.scene7) d.scene7 = true; });
+      "cld-scene7-result", 20000).then(msg => {
+        if (!msg || !msg.results) return;
+        msg.results.forEach(x => { const d = domains.get(x.host); if (d && x.scene7) d.scene7 = true; });
         render();
       });
   }
@@ -746,7 +769,8 @@ async function cloudinarySavings() {
   console.log("%cCloudinary savings%c  " + t.pct.toFixed(1) + "% across " + t.n + " images  (" +
     (t.orig / 1000).toFixed(1) + " KB -> " + (t.cld / 1000).toFixed(1) + " KB, " + TRANSFORM + ")",
     "font-weight:700", "font-weight:400");
-  console.log("Both sides requested with Accept: " + accept);
+  console.log("Both sides requested with Accept: " + (acceptUsed || accept) +
+    "\n  (" + (acceptSource || "not reported") + ")");
   if (csp.length) console.warn("CSP violations during the run:", csp);
 }
 
