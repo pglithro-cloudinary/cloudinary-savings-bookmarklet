@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Measurement helper</title>
+</head>
+<body>
+<p style="font:13px system-ui;color:#555;padding:12px">
+Measurement helper for the Cloudinary savings bookmarklet. This page is meant to be embedded
+in a hidden iframe; it performs the size comparisons that the host page's Content-Security-Policy
+blocks, and posts the results back to whoever framed it.
+</p>
+<script>
+(function () {
+  // Only ever measure these. Keeps the helper from being used as a general-purpose
+  // cross-origin measurement proxy by anyone who happens to frame it.
+  var ALLOWED_SOURCE_HOSTS = ["asda.scene7.com"];
+  var CLOUDINARY_HOST = "res.cloudinary.com";
+  var CONCURRENCY = 8;
+
+  function allowed(u) {
+    try {
+      var h = new URL(u).host;
+      return ALLOWED_SOURCE_HOSTS.indexOf(h) !== -1;
+    } catch (e) { return false; }
+  }
+
+  async function sizeOf(url, accept) {
+    try {
+      var r = await fetch(url, { method: "HEAD", headers: { "Accept": accept }, cache: "no-store" });
+      if (!r.ok) return { bytes: null, error: "HTTP " + r.status };
+      var len = r.headers.get("content-length");
+      return {
+        bytes: len ? Number(len) : null,
+        type: r.headers.get("content-type") || null,
+        error: len ? null : "no content-length"
+      };
+    } catch (e) {
+      return { bytes: null, error: String(e.message || e).slice(0, 80) };
+    }
+  }
+
+  async function pool(items, n, fn) {
+    var out = new Array(items.length), i = 0;
+    var workers = new Array(Math.min(n, items.length)).fill(0).map(async function () {
+      while (i < items.length) { var k = i++; out[k] = await fn(items[k], k); }
+    });
+    await Promise.all(workers);
+    return out;
+  }
+
+  window.addEventListener("message", async function (ev) {
+    var msg = ev.data;
+    if (!msg || msg.type !== "cld-measure" || !Array.isArray(msg.urls)) return;
+
+    var accept = typeof msg.accept === "string" ? msg.accept
+      : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+    var prefix = typeof msg.prefix === "string" && msg.prefix.indexOf("https://" + CLOUDINARY_HOST + "/") === 0
+      ? msg.prefix : null;
+
+    var results = await pool(msg.urls.slice(0, 300), CONCURRENCY, async function (url) {
+      if (!allowed(url)) return { url: url, error: "host not allowed" };
+      var cldUrl = prefix ? prefix + encodeURIComponent(url) : null;
+      // Same Accept header on both sides, so we compare like with like.
+      var pair = await Promise.all([
+        sizeOf(url, accept),
+        cldUrl ? sizeOf(cldUrl, accept) : Promise.resolve({ bytes: null, error: "no prefix" })
+      ]);
+      return {
+        url: url,
+        cldUrl: cldUrl,
+        orig: pair[0].bytes, origType: pair[0].type, origError: pair[0].error,
+        cld: pair[1].bytes, cldType: pair[1].type, cldError: pair[1].error
+      };
+    });
+
+    ev.source.postMessage({ type: "cld-results", id: msg.id, results: results }, ev.origin);
+  });
+
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: "cld-helper-ready" }, "*");
+  }
+})();
+</script>
+</body>
+</html>
