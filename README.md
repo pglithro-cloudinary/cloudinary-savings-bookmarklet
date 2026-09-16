@@ -155,9 +155,25 @@ browser enforces that, not the helper — so framing it grants no access the fra
 ## Rendering
 
 Badges live in one fixed overlay layer rather than wrapping each image, so the page's own layout
-is never touched; they reposition on scroll and resize. The panel lives in a shadow root so page
-CSS can't reach it. Badge sizes step down with the image (full → percentage-only → ring-only
-below 45px).
+is never touched. The panel lives in a shadow root so page CSS can't reach it. Badge sizes step
+down with the image (full → percentage-only → ring-only below 45px).
+
+Positions are recomputed every animation frame, not on scroll events: carousels commonly move
+with a CSS transform, which fires no scroll event at all, so scroll-driven repositioning left
+badges stranded behind their slides.
+
+Visibility is geometric — the image rect intersected with the viewport and with every clipping
+ancestor, cached per badge. A slide scrolled out of an `overflow:hidden` carousel is hidden, and
+so is one showing only a sliver at the clip edge, whose badge would otherwise be larger than the
+visible image and hang outside the carousel. IntersectionObserver is used only as a change
+signal: it delivers nothing while the tab is hidden, so relying on it for visibility meant no
+badges ever appeared for anyone who clicked the bookmarklet and switched tabs.
+
+## Picking up more images
+
+Scrolling a long listing loads more imagery, so the tool rescans after scrolling settles and
+measures only URLs it hasn't seen, reporting how many it found. Existing badges and totals are
+left alone.
 
 ## Request fairness
 
@@ -195,6 +211,13 @@ would overstate the win by roughly 7 points on Scene7 — 322 KB with a default 
 | `www.ikea.com`, `en.wikipedia.org` | Confirmed `connect-src` blocks third-party fetch (helper needed) |
 | `images.jackjones.com` (no CORS) | 64 measured via `fl_getinfo`; excluded by default, 58.9% on opt-in |
 | `www.banyantree.com` (no CORS) | Originals readable via Resource Timing; Cloudinary blocked by origin WAF |
+
+## Interface
+
+The panel states the number and little else. Anything technical — build hashes, CSP violations,
+how each domain was measured, the `Accept` header and its provenance, failure causes — lives under
+**Advanced**, alongside the icon-only domains and the copy button. The out-of-date notice is three
+instructions with no hashes in it.
 
 ## Versioning and staleness
 
