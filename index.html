@@ -331,6 +331,9 @@ async function cloudinarySavings() {
   const HELPER = "https://pglithro-cloudinary.github.io/cloudinary-savings-bookmarklet/helper.html";
   const HELPER_ORIGIN = "https://pglithro-cloudinary.github.io";
   const GREEN = "#00C853", GREEN_DEEP = "#00893C";
+  // White-recoloured so it reads on the green panel; w_240 for a 110px slot at 2x (880 bytes).
+  const LOGO = "https://res.cloudinary.com/patrickg-assets/image/upload/" +
+    "f_auto,q_auto,w_240,e_colorize:100,co_white/v1773831502/samples/cloudinary-logo-vector.svg";
   const THUMB = 100;   // px in either dimension; below this an image is a thumbnail
   const MIN_BIG = 2;   // a domain needs this many non-thumbnail images to be on by default
 
@@ -696,7 +699,12 @@ async function cloudinarySavings() {
       'color:#fff;border:2px solid #fff;border-radius:14px;box-shadow:0 6px 28px rgba(0,0,0,.4);' +
       'font:13px/1.45 system-ui,-apple-system,sans-serif;padding:14px 16px;text-shadow:0 1px 2px rgba(0,0,0,.3)}' +
     '.eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;opacity:.9}' +
-    '.hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}' +
+    '.hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}' +
+    '.logo{width:110px;height:auto;display:block;opacity:.96}' +
+    'button.advlink{width:auto;margin:9px 0 0;padding:2px 0;background:none;border:0;color:#fff;' +
+      'opacity:.72;font:600 10.5px system-ui,sans-serif;cursor:pointer;text-align:left;display:block}' +
+    'button.advlink:hover{opacity:1}' +
+    'button.ghost.small{margin-top:8px;padding:5px 9px;font-size:11px;font-weight:600}' +
     'button.x{width:auto;margin:0;padding:0 2px;background:none;color:#fff;font-size:19px;' +
       'line-height:1;border:0;opacity:.8;cursor:pointer;flex:none}' +
     'button.x:hover{opacity:1}' +
@@ -731,20 +739,21 @@ async function cloudinarySavings() {
   const panel = root.querySelector(".p");
   document.documentElement.appendChild(host);
 
-  let showDiag = false, showAdv = false;
+  let showAdv = false, logoData = null, logoPending = false;
 
   function render() {
     const t = totals();
     const anyDone = allDomains.some(d => d.state === "done");
     const busy = allDomains.some(d => d.state === "measuring");
 
-    const closeBtn = '<button class="x" id="cl" title="Close">&times;</button>';
+    const closeBtn = '<img class="logo" id="lg" src="' + LOGO + '" alt="Cloudinary">' +
+      '<button class="x" id="cl" title="Close">&times;</button>';
     const autoBox = '<label class="auto"><input type="checkbox" id="ar"' + (autoRescan ? " checked" : "") +
       '> Re-scan automatically when the page changes</label>';
 
     if (navigated) {
       panel.innerHTML =
-        '<div class="hdr"><div class="eyebrow">Page changed</div>' + closeBtn + '</div>' +
+        '<div class="hdr">' + closeBtn + '</div><div class="eyebrow">Page changed</div>' +
         '<div class="big" style="font-size:20px">Results cleared</div>' +
         '<div class="sub2">This page navigated to a new URL, so the previous measurements no longer ' +
         'describe what you are looking at.</div>' +
@@ -754,9 +763,8 @@ async function cloudinarySavings() {
     }
 
     const nothingIncluded = anyDone && t.n === 0;
-    let html = '<div class="hdr"><div class="eyebrow">' +
-      (nothingIncluded ? "Nothing included" : anyDone ? "Cloudinary would save" : "Analysing page") +
-      '</div>' + closeBtn + '</div>';
+    let html = '<div class="hdr">' + closeBtn + '</div><div class="eyebrow">' +
+      (nothingIncluded ? "Nothing included" : anyDone ? "would save" : "Analysing page") + '</div>';
     if (nothingIncluded) {
       html += '<div class="big" style="font-size:20px">&mdash;</div>' +
         '<div class="sub2">No domain is currently contributing to a total. Tick one below to ' +
@@ -807,17 +815,17 @@ async function cloudinarySavings() {
     }
 
     html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>';
-    if (minor.length) {
-      html += '<button id="av" class="ghost">' + (showAdv ? "Hide advanced" : "Advanced") +
-        ' (' + minor.length + ')</button>';
-      if (showAdv) {
+    html += '<button id="av" class="advlink">' + (showAdv ? "&#9662;" : "&#9656;") + ' Advanced' +
+      (minor.length ? ' &middot; ' + minor.length + ' minor domain' + (minor.length === 1 ? "" : "s") : "") +
+      ' &amp; diagnostics</button>';
+    if (showAdv) {
+      if (minor.length) {
         html += '<div class="sec"><div class="lbl">Nothing over ' + THUMB + 'px</div>' +
           '<div class="dm" style="margin:-2px 0 5px">Icons, swatches and tracking pixels. Tick one to ' +
           'measure it anyway.</div>' + minor.map(row).join("") + '</div>';
       }
+      html += diagnosticsHtml() + '<button id="cp" class="ghost small">Copy diagnostics</button>';
     }
-    html += '<button id="dg" class="ghost">' + (showDiag ? "Hide diagnostics" : "Diagnostics") + '</button>';
-    if (showDiag) html += diagnosticsHtml();
     html += autoBox;
 
     panel.innerHTML = html;
@@ -838,8 +846,22 @@ async function cloudinarySavings() {
       });
     });
     on("#tg", "click", () => { overlaysVisible = !overlaysVisible; applyVisibility(); render(); });
-    on("#dg", "click", () => { showDiag = !showDiag; render(); });
     on("#av", "click", () => { showAdv = !showAdv; render(); });
+    on("#cp", "click", e => copyDiagnostics(e.currentTarget));
+
+    // img-src on the host page may refuse Cloudinary; fall back to a data: URI via the helper.
+    const logo = panel.querySelector("#lg");
+    if (logo && !logoData) {
+      logo.addEventListener("error", async () => {
+        logo.style.visibility = "hidden";
+        if (logoPending) return;
+        logoPending = true;
+        const res = await talk({ type: "cld-asset", id: Date.now(), url: LOGO }, "cld-asset-result", 15000);
+        if (res && res.dataUrl) { logoData = res.dataUrl; render(); }
+      }, { once: true });
+    } else if (logo && logoData) {
+      logo.src = logoData;
+    }
     on("#cl", "click", teardown);
     on("#rs", "click", rescan);
     on("#ar", "change", e => {
@@ -959,6 +981,113 @@ async function cloudinarySavings() {
 
     h += '</div>';
     return h;
+  }
+
+  // A plain-text rendering of everything in the diagnostics pane, for pasting into a
+  // ticket or a Slack message.
+  function diagnosticsText() {
+    const t = totals();
+    const L = [];
+    L.push("Cloudinary savings — diagnostics");
+    L.push("Page:      " + location.href);
+    L.push("When:      " + new Date().toISOString());
+    L.push("Transform: " + TRANSFORM);
+    L.push("");
+    L.push("TOTAL");
+    L.push(t.n
+      ? "  " + t.pct.toFixed(1) + "% — " + ((t.orig - t.cld) / 1000).toFixed(1) + " KB saved across " +
+        t.n + " images (" + (t.orig / 1000).toFixed(1) + " KB -> " + (t.cld / 1000).toFixed(1) + " KB)"
+      : "  nothing included");
+    L.push("");
+    L.push("DOMAINS");
+    allDomains.forEach(d => {
+      const st = domainStat(d);
+      L.push("  [" + (d.selected ? "x" : " ") + "] " + d.host +
+        (d.scene7 ? "  [SCENE7]" : "") + (d.serverSide ? "  [SERVER-SIDE]" : "") +
+        "  " + (st ? st.n + " measured" + (st.failed ? ", " + st.failed + " failed" : "") +
+          (st.n ? "  -" + st.pct.toFixed(0) + "%" : "")
+          : d.big + " over " + THUMB + "px of " + d.total));
+    });
+    L.push("");
+    L.push("HELPER");
+    L.push("  " + (helperFailed || (helperReady ? "reachable — " + HELPER_ORIGIN : "not contacted")));
+    L.push("");
+    L.push("CONTENT-SECURITY-POLICY");
+    if (!csp.length) L.push("  no violations seen on this page");
+    else csp.forEach(c => L.push("  " + c.directive + " blocked " + c.uri));
+    L.push("");
+    L.push("REQUEST FAIRNESS");
+    L.push("  Accept: " + (acceptUsed || accept));
+    L.push("  source: " + (acceptSource || "not measured"));
+    const mm = [];
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      let n = 0;
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (r && r.orig && r.cld && r.origMethod && r.cldMethod && r.origMethod !== r.cldMethod) n++;
+      });
+      if (n) mm.push("  " + d.host + " — " + n + " image(s) measured by different methods");
+    });
+    L.push(mm.length ? mm.join("\n") : "  same HTTP method used on both sides throughout");
+    L.push("");
+    L.push("HOW ORIGINALS WERE MEASURED");
+    const src = {};
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (!r || !r.orig || !r.cld) return;
+        const k = d.host + "|" + (r.origSource || "helper");
+        src[k] = (src[k] || 0) + 1;
+      });
+    });
+    const sk = Object.keys(src);
+    if (!sk.length) L.push("  nothing measured yet");
+    else sk.forEach(k => {
+      const parts = k.split("|");
+      L.push("  " + parts[0] + " — " + src[k] + "x " + parts[1] +
+        (parts[1] === "cloudinary" ? " (Accept: */* server-side; verify before quoting)" : ""));
+    });
+    L.push("");
+    L.push("FAILURES");
+    const probs = [];
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      const counts = {};
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (!r) return;
+        if (!r.orig) counts["original: " + (r.origError || "unknown")] = (counts["original: " + (r.origError || "unknown")] || 0) + 1;
+        else if (!r.cld) counts["Cloudinary: " + (r.cldError || "unknown")] = (counts["Cloudinary: " + (r.cldError || "unknown")] || 0) + 1;
+      });
+      Object.keys(counts).forEach(k => probs.push("  " + d.host + " — " + counts[k] + "x " + k));
+    });
+    L.push(probs.length ? probs.join("\n") : "  none on the measured domains");
+    L.push("");
+    L.push("Browser: " + navigator.userAgent);
+    return L.join("\n");
+  }
+
+  async function copyDiagnostics(btn) {
+    const text = diagnosticsText();
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {}
+    if (!ok) {
+      // Clipboard API needs a secure context and can be blocked by Permissions-Policy.
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch (e) {}
+    }
+    if (!ok) console.log(text);
+    btn.textContent = ok ? "Copied to clipboard" : "Copy blocked — printed to console";
+    setTimeout(() => { btn.textContent = "Copy diagnostics"; }, 2600);
   }
 
   // ---- Go -------------------------------------------------------------------

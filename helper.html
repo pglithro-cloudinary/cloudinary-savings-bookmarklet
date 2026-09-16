@@ -184,6 +184,27 @@ framing it grants no read access that the framing page didn't already have.
     var msg = ev.data;
     if (!msg || !ev.source) return;
 
+    // Fetch a Cloudinary asset as a data: URI, for pages whose img-src won't load it directly.
+    if (msg.type === "cld-asset" && typeof msg.url === "string") {
+      var dataUrl = null;
+      if (msg.url.indexOf("https://" + CLOUDINARY_HOST + "/") === 0) {
+        try {
+          var ar = await fetch(msg.url, { cache: "force-cache" });
+          if (ar.ok) {
+            var blob = await ar.blob();
+            dataUrl = await new Promise(function (res, rej) {
+              var fr = new FileReader();
+              fr.onload = function () { res(fr.result); };
+              fr.onerror = rej;
+              fr.readAsDataURL(blob);
+            });
+          }
+        } catch (e) {}
+      }
+      ev.source.postMessage({ type: "cld-asset-result", id: msg.id, dataUrl: dataUrl }, ev.origin);
+      return;
+    }
+
     if (msg.type === "cld-scene7" && Array.isArray(msg.samples)) {
       var flags = await pool(msg.samples.slice(0, 30), 4, async function (s) {
         return { host: s.host, scene7: await scene7Check(s.sample) };
