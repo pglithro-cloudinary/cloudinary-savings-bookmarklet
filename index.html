@@ -1069,25 +1069,53 @@ async function cloudinarySavings() {
     return L.join("\n");
   }
 
-  async function copyDiagnostics(btn) {
+  function copyDiagnostics(btn) {
     const text = diagnosticsText();
+
+    // Synchronous first: both clipboard routes need transient user activation, and awaiting
+    // the async API before falling back would spend it.
     let ok = false;
-    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {}
-    if (!ok) {
-      // Clipboard API needs a secure context and can be blocked by Permissions-Policy.
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
-        document.body.appendChild(ta);
-        ta.select();
-        ok = document.execCommand("copy");
-        ta.remove();
-      } catch (e) {}
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = document.execCommand("copy");
+      ta.remove();
+    } catch (e) {}
+
+    const settle = good => {
+      btn.textContent = good ? "Copied to clipboard" : "Couldn't copy — select the text below";
+      if (!good) showCopyBox(text);
+      setTimeout(() => { btn.textContent = "Copy diagnostics"; }, 2600);
+    };
+
+    if (ok) { settle(true); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => settle(true), () => settle(false));
+    } else {
+      settle(false);
     }
-    if (!ok) console.log(text);
-    btn.textContent = ok ? "Copied to clipboard" : "Copy blocked — printed to console";
-    setTimeout(() => { btn.textContent = "Copy diagnostics"; }, 2600);
+  }
+
+  // Last resort: put the text on screen, selected, so it can always be copied by hand.
+  function showCopyBox(text) {
+    let box = panel.querySelector("#cpbox");
+    if (!box) {
+      box = document.createElement("textarea");
+      box.id = "cpbox";
+      box.readOnly = true;
+      box.style.cssText = "width:100%;height:120px;margin-top:8px;font:10px ui-monospace,Menlo,monospace;" +
+        "border-radius:8px;border:0;padding:8px;background:rgba(0,0,0,.35);color:#fff;resize:vertical";
+      panel.appendChild(box);
+    }
+    box.value = text;
+    box.focus();
+    box.select();
+    console.log(text);
   }
 
   // ---- Go -------------------------------------------------------------------
