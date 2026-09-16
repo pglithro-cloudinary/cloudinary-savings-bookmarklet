@@ -305,11 +305,12 @@ async function cloudinarySavings() {
   const HELPER_ORIGIN = "https://pglithro-cloudinary.github.io";
   const GREEN = "#00C853", GREEN_DEEP = "#00893C";
 
-  // Scene7 Image Serving query parameters. Seeing several of these on a URL is a
-  // strong hint even when the hostname gives nothing away.
-  const S7_PARAMS = ["wid", "hei", "qlt", "fmt", "resmode", "op_usm", "op_sharpen",
-    "op_brightness", "op_contrast", "scl", "bfc", "iccembed", "printres", "defaultimage",
-    "extend", "rgn", "cropn", "sharpen", "align", "fit"];
+  // Scene7 Image Serving query parameters. Some are near-unique to Scene7; others
+  // (wid/hei/qlt) are suggestive but shared with other imaging CDNs, so they score less.
+  // This catches deployments that serve Scene7 from a rewritten path with no /is/image/ in it.
+  const S7_PARAMS_STRONG = ["resmode", "op_usm", "op_sharpen", "op_brightness", "op_contrast",
+    "defaultimage", "bfc", "iccembed", "printres", "scl", "cropn", "rgn", "extend"];
+  const S7_PARAMS_WEAK = ["wid", "hei", "qlt", "fmt", "sharpen", "align", "fit"];
 
   // Score a URL for Scene7-likeness. Nothing here is conclusive on its own; the
   // helper proves it against the live server before we measure anything.
@@ -328,9 +329,12 @@ async function cloudinarySavings() {
     if (path.indexOf("/is/image/") > -1 || path.indexOf("/is/content/") > -1) {
       score += 3; hints.push("/is/ Image Serving path");
     }
-    const params = S7_PARAMS.filter(p => new RegExp("[?&]" + p + "=").test(query));
-    if (params.length >= 2) { score += 2; hints.push(params.slice(0, 4).join(",") + " params"); }
-    else if (params.length === 1) { score += 1; hints.push(params[0] + " param"); }
+    const strong = S7_PARAMS_STRONG.filter(p => new RegExp("[?&]" + p + "=").test(query));
+    const weak = S7_PARAMS_WEAK.filter(p => new RegExp("[?&]" + p + "=").test(query));
+    score += Math.min(strong.length * 2, 4) + Math.min(weak.length, 3);
+    if (strong.length || weak.length) {
+      hints.push(strong.concat(weak).slice(0, 4).join(",") + " params");
+    }
     if (/[?&]\$[a-z0-9_.-]+\$/.test(query)) { score += 2; hints.push("$preset$ syntax"); }
 
     return score >= 3 ? { url: rawUrl, host: host, score: score, hints: hints } : null;
