@@ -158,6 +158,11 @@ Badges live in one fixed overlay layer rather than wrapping each image, so the p
 is never touched. The panel lives in a shadow root so page CSS can't reach it. Badge sizes step
 down with the image (full → percentage-only → ring-only below 45px).
 
+Images are ringed in dashed green the moment they're queued, before any measurement starts, so
+it's visible which images are being checked while the requests are in flight. Each ring turns
+solid and gains a badge when that image's numbers arrive, and is removed if it couldn't be
+measured. Observed on the fixture: 15 dashed rings at 737ms, all resolved by 2.3s.
+
 Positions are recomputed every animation frame, not on scroll events: carousels commonly move
 with a CSS transform, which fires no scroll event at all, so scroll-driven repositioning left
 badges stranded behind their slides.
@@ -240,9 +245,11 @@ endpoints it calls.
 node smoke-test.js
 ```
 
-Extracts the payload as the install page does and runs it against a DOM stub. `node --check`
-can't see temporal-dead-zone or declaration-order faults; this does, and two such bugs reached
-deploy before it existed.
+Extracts the payload as the install page does and runs it against a DOM stub, getting through
+every declaration, the overlay layer, the shadow-root panel and the first render before stopping
+at the helper request. `node --check` can't see temporal-dead-zone, declaration-order or
+name-collision faults; this does, and three such bugs reached deploy before it existed. Verified
+to fail on an injected fault, not just to pass on good code.
 
 `test-fixture.html` on the same origin runs the deployed payload against four image domains at
 four size tiers — useful because most real sites block `connect-src` to anything they don't own,
