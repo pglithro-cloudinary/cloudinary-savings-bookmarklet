@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookmarklet test fixture</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 24px; background: #fafafa; color: #222; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  p.note { color: #666; max-width: 70ch; }
+  h2 { font-size: 15px; margin: 26px 0 8px; color: #444; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .row img { display: block; background: #ddd; }
+  .big img { width: 300px; height: 200px; object-fit: cover; }
+  .mid img { width: 150px; height: 150px; object-fit: cover; }
+  .small img { width: 70px; height: 70px; object-fit: cover; }
+  .micro img { width: 28px; height: 28px; object-fit: cover; }
+  button { font: 600 14px system-ui; padding: 10px 16px; border-radius: 8px; border: 1px solid #00893C;
+           background: #00C853; color: #fff; cursor: pointer; }
+  #log { white-space: pre-wrap; font: 12px/1.5 ui-monospace, Menlo, monospace; background: #fff;
+         border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<h1>Bookmarklet test fixture</h1>
+<p class="note">
+  Same origin as the bookmarklet, so this page can load and run the deployed payload directly —
+  handy because most real sites now block <code>connect-src</code> to anything they don't own.
+  Four image domains at four size tiers, to exercise domain grouping, the 100&times;100 threshold,
+  the badge tiers and the toggling.
+</p>
+<p><button id="run">Run the deployed payload</button></p>
+<div id="log">idle</div>
+
+<h2>images.unsplash.com — 4 large (should be ticked by default)</h2>
+<div class="row big">
+  <img src="https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800" alt="">
+  <img src="https://images.unsplash.com/photo-1518791841217-8f162f1e1131?w=800" alt="">
+  <img src="https://images.unsplash.com/photo-1444464666168-49d633b86797?w=800" alt="">
+  <img src="https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=800" alt="">
+</div>
+
+<h2>asda.scene7.com — 2 large + 1 mid (ticked, and should carry the SCENE7 tag)</h2>
+<div class="row big">
+  <img src="https://asda.scene7.com/is/image/Asda/5059206064694?wid=500" alt="">
+  <img src="https://asda.scene7.com/is/image/Asda/5059206064694?wid=600&qlt=90" alt="">
+</div>
+<div class="row mid">
+  <img src="https://asda.scene7.com/is/image/Asda/5059206064694?wid=300" alt="">
+</div>
+
+<h2>images.acer.com — 1 large + 1 small (1 big only, so unticked by default)</h2>
+<div class="row big">
+  <img src="https://images.acer.com/is/image/acer/logo-acer?wid=500" alt="">
+</div>
+<div class="row small">
+  <img src="https://images.acer.com/is/image/acer/logo-acer?wid=120" alt="">
+</div>
+
+<h2>res.cloudinary.com — 3 micro only (listed but unticked; tick it to test on-demand measuring)</h2>
+<div class="row micro">
+  <img src="https://res.cloudinary.com/demo/image/upload/w_30/sample.jpg" alt="">
+  <img src="https://res.cloudinary.com/demo/image/upload/w_30/lady.jpg" alt="">
+  <img src="https://res.cloudinary.com/demo/image/upload/w_30/couple.jpg" alt="">
+</div>
+
+<script>
+document.getElementById("run").addEventListener("click", async () => {
+  const log = document.getElementById("log");
+  log.textContent = "fetching deployed payload...";
+  try {
+    const html = await fetch("index.html", { cache: "no-store" }).then(r => r.text());
+    const a = html.indexOf("async function cloudinarySavings() {");
+    const b = html.indexOf("// ---- Wire it into the page ----");
+    const src = html.slice(a, b).trim();
+    log.textContent = "loaded " + src.length + " chars; running...";
+    await new Function("return (" + src + ")")()();
+    log.textContent = "ran. Check the panel bottom-right and the console.";
+  } catch (e) {
+    log.textContent = "failed: " + e.message;
+  }
+});
+</script>
+</body>
+</html>
