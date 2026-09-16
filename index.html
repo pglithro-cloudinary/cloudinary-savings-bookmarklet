@@ -919,11 +919,10 @@ async function cloudinarySavings() {
     const closeBtn = '<img class="logo" id="lg" src="' + LOGO + '" alt="Cloudinary">' +
       '<button class="x" id="cl" title="Close">&times;</button>';
     const updateBanner = updateInfo
-      ? '<div class="update">Out of date &mdash; you are running build <code>' + MY_FP +
-        '</code>, the current one is <code>' + updateInfo.build + '</code>' +
-        (updateInfo.version ? ' (v' + updateInfo.version + ')' : "") + '. ' +
-        '<a href="' + INSTALL_URL + '" target="_blank" rel="noopener">Open the install page</a> and ' +
-        'drag the button again.</div>'
+      ? '<div class="update"><b>There\'s a newer version of this bookmarklet.</b><br>' +
+        '1. <a href="' + INSTALL_URL + '" target="_blank" rel="noopener">Open the install page</a><br>' +
+        '2. Drag the green button onto your bookmarks bar<br>' +
+        '3. Delete the old bookmark</div>'
       : "";
     const autoBox = '<label class="auto"><input type="checkbox" id="ar"' + (autoRescan ? " checked" : "") +
       '> Re-scan automatically when the page changes</label>';
@@ -962,11 +961,11 @@ async function cloudinarySavings() {
         : d.state === "failed" ? "failed"
         : st ? st.n + " measured" + (st.failed ? ", " + st.failed + " failed" : "")
         : d.big + " over " + THUMB + "px of " + d.total;
-      if (d.serverSide) note += d.selected ? " &middot; server-side estimate" : " &middot; excluded, unverifiable";
+      if (d.serverSide) note += d.selected ? " &middot; estimated" : " &middot; estimated, not counted";
       return '<label class="d"><input type="checkbox" data-i="' + i + '"' + (d.selected ? " checked" : "") + '>' +
         '<span class="dn"><span class="dh">' + d.host +
           (d.scene7 ? '<span class="tag">SCENE7</span>' : "") +
-          (d.serverSide ? '<span class="tag warn">SERVER-SIDE</span>' : "") + '</span>' +
+          (d.serverSide ? '<span class="tag warn">ESTIMATE</span>' : "") + '</span>' +
         '<span class="dm">' + note + '</span></span>' +
         '<span class="dv">' + (st && st.n ? "&minus;" + st.pct.toFixed(0) + "%" : "") + '</span></label>';
     };
@@ -983,16 +982,20 @@ async function cloudinarySavings() {
 
     const ss = allDomains.filter(d => d.serverSide);
     if (ss.length) {
-      html += '<div class="warnbox">' + ss.length + ' domain' + (ss.length === 1 ? "" : "s") +
-        ' could only be measured <b>server-side</b>, because the host refuses cross-origin reads. ' +
-        'Cloudinary fetches those with <code>Accept: */*</code>, so the original is only right if ' +
-        'the host doesn\'t vary by Accept &mdash; ' +
+      const only = ss.some(d => d.selected) && !allDomains.some(d => d.selected && !d.serverSide);
+      html += '<div class="warnbox"><b>Some figures are estimates.</b> This site won\'t let your ' +
+        'browser measure its images directly, so ' +
+        (ss.length === 1 ? "one domain was" : ss.length + " domains were") + ' measured another way. ' +
         (ss.some(d => d.selected)
-          ? (allDomains.some(d => d.selected && !d.serverSide)
-              ? 'included in the total above.'
-              : '<b>included, because nothing else on this page could be measured.</b>')
-          : 'left out of the total above.') +
-        ' Verify before quoting: the console prints a two-line curl check.</div>';
+          ? (only ? 'They are included &mdash; nothing else here could be measured.'
+                  : 'They are included in the total.')
+          : 'They are left out of the total.') +
+        ' Check these before quoting them &mdash; see Advanced.</div>';
+    }
+
+    if (foundSinceStart) {
+      html += '<div class="sub2" style="margin-top:7px;opacity:.85">+' + foundSinceStart +
+        ' more image' + (foundSinceStart === 1 ? "" : "s") + ' found while scrolling</div>';
     }
 
     html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>';
@@ -1077,7 +1080,8 @@ async function cloudinarySavings() {
     h += '<b>Version</b>';
     h += '<span class="' + (updateInfo ? "bad" : "ok") + '">' + BUILD + '</span><br>' +
       (updateInfo
-        ? 'Out of date. Current published build is <code>' + updateInfo.build + '</code>.'
+        ? 'Installed build <code>' + MY_FP + '</code>, published build <code>' +
+          updateInfo.build + '</code>' + (updateInfo.version ? ' (v' + updateInfo.version + ')' : "") + '.'
         : updateChecked
           ? 'This is the current published build.'
           : 'Checking against the published build&hellip;');
@@ -1154,9 +1158,11 @@ async function cloudinarySavings() {
         return parts[0] + " &mdash; " + sources[k] + "x " + (SOURCE_LABEL[parts[1]] || parts[1]);
       }).join("<br>");
       if (srcKeys.some(k => k.split("|")[1] === "cloudinary")) {
-        h += '<br><span class="bad">Server-side figures come from Cloudinary\'s own fetch, not from ' +
-          'this browser. If such a host varied its response by Accept the original could be a ' +
-          'different format than you would receive &mdash; though hosts that block CORS rarely negotiate.</span>';
+        h += '<br><span class="bad">Those originals were fetched by Cloudinary with ' +
+          '<code>Accept: */*</code>, not by this browser. If such a host varies its response by ' +
+          'Accept, the original could be a different format than a visitor receives &mdash; though ' +
+          'hosts that block cross-origin reads rarely negotiate. The console prints a two-line curl ' +
+          'check that settles it.</span>';
       }
     }
 
