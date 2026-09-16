@@ -1,77 +1,87 @@
-# Scene7 → Cloudinary savings bookmarklet
+# Image savings bookmarklet
 
-A one-click browser bookmarklet for demoing image performance gains on **any** site running
-Adobe Scene7 / Dynamic Media.
+A one-click browser bookmarklet for demoing Cloudinary image savings on **any** site.
 
-It finds Scene7 imagery by URL structure rather than a hardcoded domain, proves each candidate
-host really is a Scene7 image server, re-fetches every image through Cloudinary in fetch mode
-with `f_auto,q_auto:eco`, compares `content-length`, and overlays the byte savings in bright
-green on each image plus a summary panel with the page total.
+It groups the page's images by host, works out which domains are actually serving content
+imagery, measures those against Cloudinary in fetch mode with `f_auto,q_auto:eco`, and overlays
+the byte savings in green. Domains can be toggled in and out live, and anything blocked is
+reported with the reason.
 
 **Install page:** https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/
+**Test fixture:** https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/test-fixture.html
 
-## Detection, then proof
+## How domains are chosen
 
-Most Scene7 customers serve from a vanity CNAME (`images.acer.com`), so the hostname gives
-nothing away. Candidate scoring looks for:
+Every image is grouped by host and counted by how many render **larger than 100×100** — the line
+between content imagery and icons, swatches and tracking pixels. Any domain with **two or more**
+such images is ticked and measured by default; every other domain is listed unticked so it can be
+pulled in. Ticking measures on demand; unticking removes it from the total and hides its badges.
 
-- a `*.scene7.com` host (+4)
-- an `/is/image/` or `/is/content/` path (+3)
-- Scene7-specific query params — `resmode`, `op_usm`, `scl`, `defaultImage`… (+2 each, capped at 4)
-- generic imaging params — `wid`, `hei`, `qlt`, `fmt`… (+1 each, capped at 3)
-- `$preset$` macro syntax (+2)
+Scene7 / Dynamic Media hosts get a `SCENE7` tag, confirmed by asking the host's Image Serving API
+for its `#S7Z` signature (`?req=exists`). That is cosmetic labelling only and gates nothing.
 
-A score of 3+ makes it a candidate. Candidates are then **verified against the live server**
-before any number is shown:
+## Blocking diagnostics
 
-1. `GET <base>?req=exists` — Scene7's Image Serving API answers every `req=` command with an
-   `#S7Z OK` block in `text/plain`, sent with `access-control-allow-origin: *`. No static CDN
-   produces this, and it works even for an asset that doesn't exist.
-2. Fallback for deployments that block `req=`: compare `?wid=20` against `?wid=600`. A static
-   CDN returns identical bytes; a Scene7 server doesn't.
+The **Diagnostics** button reports:
 
-Only verified hosts get measured. If nothing verifies, you get an alert naming each host and
-why it failed, rather than a confident number about a CDN that isn't Scene7.
+- **CSP violations**, captured live from the `securitypolicyviolation` event with directive and
+  blocked URL — the most useful signal when a run comes back empty.
+- **Helper reachability** — whether the measuring iframe loaded, and if not, whether `frame-src`
+  was the cause.
+- **Per-domain failures**, grouped by cause: no `access-control-allow-origin` (host refuses
+  cross-origin reads — unfixable client-side), no `content-length` (chunked response), HTTP 403
+  (hotlink protection), or a Cloudinary 401/403 meaning the cloud isn't allowed to fetch that
+  domain.
 
-Verified working on `asda.scene7.com` (George) and `images.acer.com` (vanity CNAME, no
-`scene7.com` anywhere in the URL). The `#S7Z` signature was additionally confirmed against
-`assets.ace.aaa.com`, `m.ahstatic.com`, `dynamicmedia.accenture.com` and
-`images.albertsons-media.com`.
+Measurement degrades gracefully: `HEAD` first, falling back to `GET` with the body cancelled once
+headers arrive, for hosts that reject HEAD or omit `content-length`. When a fetch fails outright a
+`no-cors` probe separates "won't let us read it" from "couldn't reach it".
 
 ## Why there's a helper page
 
-Retail sites increasingly ship a strict Content-Security-Policy. George's `connect-src`
-allowlist excludes both `res.cloudinary.com` *and* `asda.scene7.com`, so a `fetch()` from the
-page is refused for both sides of the comparison; `img-src` excludes Cloudinary too, so the
-page can't even display a Cloudinary image (a true visual swap needs a browser extension).
+Strict CSP is now the norm — George, IKEA and Wikipedia all block `connect-src` to third-party
+origins, so a `fetch()` from the page is refused for both sides of the comparison. What they do
+allow is framing. A cross-origin iframe is a separate document with its own CSP, so `helper.html`
+does the measuring and posts results back via `postMessage`; the page only draws DOM overlays,
+which CSP doesn't restrict.
 
-What CSP does allow there is `frame-src *`. A cross-origin iframe is a separate document
-governed by its own CSP, so `helper.html` on this origin does the verifying and measuring and
-posts results back via `postMessage`. The page itself only draws DOM overlays, which CSP
-doesn't restrict.
+The helper can only read a size when the target server sends `access-control-allow-origin` — the
+browser enforces that, not the helper — so framing it grants no access the framing page lacked.
 
-The helper only measures hosts it verified as Scene7 in that same session, and only through the
-configured Cloudinary cloud, so framing it doesn't make it a general-purpose measurement proxy.
+## Rendering
+
+Badges live in one fixed overlay layer rather than wrapping each image, so the page's own layout
+is never touched; they reposition on scroll and resize. The panel lives in a shadow root so page
+CSS can't reach it. Badge sizes step down with the image (full → percentage-only → ring-only
+below 45px).
 
 ## Accuracy note
 
-Scene7 already negotiates AVIF. Measuring it with fetch's default `Accept: */*` returns
-WebP/JPEG and overstates the win by roughly 7 points. Both sides are requested with the same
-browser `Accept` header, and the full-size badges print `avif → avif` so it's visible that the
-comparison is like-for-like.
+Modern image CDNs already negotiate AVIF. Both sides are requested with the same browser `Accept`
+header, and full-size badges print `avif → avif` (or `jpeg → avif`) so the comparison is visible.
+Measuring the origin as JPEG against Cloudinary as AVIF overstates the win by roughly 7 points on
+Scene7.
+
+## Verified
+
+| Site | Result |
+|---|---|
+| Test fixture (4 domains, 4 size tiers) | Correct grouping, ticking, tags, on-demand measure, toggling |
+| `direct.asda.com` (George, strict CSP) | 16-of-29 rule correct, CSP violations captured, helper loads |
+| `www.acer.com` | 46/46 measured, 52.8% |
+| `www.ikea.com`, `en.wikipedia.org` | Confirmed `connect-src` blocks third-party fetch (helper needed) |
 
 ## Notes
 
-- Sizes come from `content-length` on a `HEAD` request; anything served without it is skipped.
-- Totals count each unique image URL once, even when it appears several times on the page.
-- Images under 45px (colour swatches) get the green ring but no badge — they still count.
+- Sizes come from `content-length`; anything served without it is skipped.
+- Totals count each unique image URL once.
+- Only `<img>` elements are inspected — CSS backgrounds and `<canvas>` aren't.
 - Savings are format + quality only. Responsive sizing would increase them further.
-- Cloudinary fetch mode must be allowed to pull from the customer's domain.
-- Delivery uses the `patrickg` cloud; change `cloudinaryPrefix` in `index.html` to repoint it.
+- Delivery uses the `patrickg` cloud; change `CLOUD` in `index.html` to repoint it.
 
 ## Editing
 
-The bookmarklet lives as a readable function (`cloudinarySavings`) inside `index.html`. The page
-stringifies it at load time to build the `javascript:` URL, so editing the function updates the
-bookmark code, the copy box, and the displayed source together. Changing `helper.html` takes
-effect immediately — no re-install needed.
+The bookmarklet is a readable function (`cloudinarySavings`) inside `index.html`, stringified at
+load time to build the `javascript:` URL. Editing it updates the bookmark code, the copy box and
+the displayed source together. `helper.html` changes take effect without re-installing; payload
+changes need the bookmark re-dragging.
