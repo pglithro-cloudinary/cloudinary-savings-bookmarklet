@@ -482,20 +482,27 @@ async function cloudinarySavings() {
     return out;
   }
 
-  // True when the image is actually on screen: sized, inside the viewport, not scrolled out of
-  // any clipping ancestor, and not hidden by CSS.
+  // How much of the image is genuinely on screen, after the viewport and every clipping
+  // ancestor have had their say. Returns the visible rect, or null if there isn't enough of
+  // it to be worth labelling — a sliver at the edge of a carousel gets no badge, because its
+  // badge would be bigger than the image and would hang outside the carousel.
+  const MIN_VISIBLE = 0.6;
   function isShown(m) {
     const r = m.img.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return null;
-    if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return null;
+
+    let left = Math.max(r.left, 0), top = Math.max(r.top, 0);
+    let right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight);
     for (const c of m.clippers) {
       const b = c.getBoundingClientRect();
-      if (r.right <= b.left + 1 || r.left >= b.right - 1 ||
-          r.bottom <= b.top + 1 || r.top >= b.bottom - 1) return null;
+      left = Math.max(left, b.left); top = Math.max(top, b.top);
+      right = Math.min(right, b.right); bottom = Math.min(bottom, b.bottom);
     }
+    if (right - left < r.width * MIN_VISIBLE || bottom - top < r.height * MIN_VISIBLE) return null;
+
     if (typeof m.img.checkVisibility === "function" &&
         !m.img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return null;
-    return r;
+    return { left, top, w: r.width, h: r.height };
   }
 
   function tierFor(w, h) {
@@ -571,7 +578,7 @@ async function cloudinarySavings() {
         continue;
       }
       {
-        const tier = tierFor(Math.round(b.width), Math.round(b.height));
+        const tier = tierFor(Math.round(b.w), Math.round(b.h));
         if (tier !== m.tier && tier !== "micro") {
           m.tier = tier;
           m.badge.innerHTML = badgeHtml(tier, m.r);
@@ -584,6 +591,7 @@ async function cloudinarySavings() {
           left: Math.max(0, Math.round(b.left + off)) + "px",
           top: Math.max(0, Math.round(b.top + off)) + "px"
         });
+
       }
     }
   }
