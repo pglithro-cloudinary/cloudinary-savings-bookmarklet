@@ -108,6 +108,11 @@
   .preview-badge.xs b { font-size: 11px; }
   .preview-row { display: flex; gap: 28px; align-items: flex-end; flex-wrap: wrap; }
   .preview-label { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.35; }
+  .version {
+    margin: 16px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .version span { color: var(--green); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -128,6 +133,11 @@
   <p style="margin-bottom:18px;font-weight:600;">Drag this button to your bookmarks bar 👇</p>
   <a class="bookmarklet" id="bm" href="#">⬇ Cloudinary Savings</a>
   <p class="hint">Clicking it here won't do much — it needs to run <em>on</em> the site you want to measure.</p>
+  <p class="version">Version <span id="ver">…</span></p>
+  <p class="hint" style="margin-top:6px">
+    The panel's <strong>Advanced</strong> section shows the version you actually have installed.
+    If it doesn't match the one above, drag the button again to update.
+  </p>
 </div>
 
 <h2>How to install it</h2>
@@ -320,6 +330,16 @@
 <script>
 // ---- The bookmarklet payload. Edited to make the savings loud and green. ----
 async function cloudinarySavings() {
+  const VERSION = "2026.09.16";
+  // Fingerprint of this function's own source. The install page computes it the same way, so a
+  // mismatch means the bookmark in your bar is older than what the page is offering.
+  const fingerprint = str => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, "0");
+  };
+  const BUILD = VERSION + " \u00b7 build " + fingerprint(cloudinarySavings.toString());
+
   // Clicking the bookmarklet twice, or re-scanning after navigation, must not stack instances.
   if (typeof window.__cldSavingsTeardown === "function") {
     try { window.__cldSavingsTeardown(); } catch (e) {}
@@ -893,6 +913,10 @@ async function cloudinarySavings() {
   function diagnosticsHtml() {
     let h = '<div class="diag">';
 
+    h += '<b>Version</b>';
+    h += '<span class="ok">' + BUILD + '</span><br>' +
+      'Compare with the install page; if the build differs, re-drag the bookmarklet.';
+
     h += '<b>Helper</b>';
     h += helperFailed ? '<span class="bad">' + helperFailed + '</span>'
       : helperReady ? '<span class="ok">reachable &mdash; measuring runs in an iframe on ' + HELPER_ORIGIN + '</span>'
@@ -989,6 +1013,7 @@ async function cloudinarySavings() {
     const t = totals();
     const L = [];
     L.push("Cloudinary savings — diagnostics");
+    L.push("Version:   " + BUILD);
     L.push("Page:      " + location.href);
     L.push("When:      " + new Date().toISOString());
     L.push("Transform: " + TRANSFORM);
@@ -1148,7 +1173,16 @@ async function cloudinarySavings() {
 
 // ---- Wire it into the page ----
 (function () {
-  const source = "(" + cloudinarySavings.toString() + ")();";
+  const src0 = cloudinarySavings.toString();
+  const fp = (str => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, "0");
+  })(src0);
+  const verMatch = src0.match(/const VERSION = "([^"]+)"/);
+  document.getElementById("ver").textContent = (verMatch ? verMatch[1] : "?") + " \u00b7 build " + fp;
+
+  const source = "(" + src0 + ")();";
   const href = "javascript:" + encodeURIComponent(source);
   const link = document.getElementById("bm");
   link.href = href;
