@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scene7 Savings Bookmarklet</title>
+<title>Image Savings Bookmarklet</title>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -115,20 +115,19 @@
 
 <header>
   <span class="eyebrow">Cloudinary · Sales demo tool</span>
-  <h1>Scene7 &rarr; Cloudinary savings bookmarklet</h1>
+  <h1>Image savings bookmarklet</h1>
   <p class="lede">
-    A one-click browser bookmark for any site running Adobe Scene7 / Dynamic Media. It detects
-    Scene7 imagery from the URL structure, <strong>proves</strong> the host really is a Scene7 image
-    server before claiming anything, then measures every image against Cloudinary with
-    <code>f_auto</code> / <code>q_auto:eco</code> and overlays the byte savings in green. Works around
-    the Content-Security-Policy retail sites increasingly enforce.
+    A one-click browser bookmark for <strong>any</strong> site. It works out which domains are actually
+    serving that page's imagery, measures them against Cloudinary with <code>f_auto</code> /
+    <code>q_auto:eco</code>, and overlays the byte savings in green. Toggle domains in or out on the
+    fly, and when something is blocked it tells you exactly what and why.
   </p>
 </header>
 
 <div class="card install-card">
   <p style="margin-bottom:18px;font-weight:600;">Drag this button to your bookmarks bar 👇</p>
   <a class="bookmarklet" id="bm" href="#">⬇ Cloudinary Savings</a>
-  <p class="hint">Clicking it here won't do anything useful — it needs to run <em>on</em> a Scene7 customer's site.</p>
+  <p class="hint">Clicking it here won't do much — it needs to run <em>on</em> the site you want to measure.</p>
 </div>
 
 <h2>How to install it</h2>
@@ -169,11 +168,13 @@
 <h2>How to use it</h2>
 <div class="card">
   <ol>
-    <li>Go to any page with product imagery on a Scene7 site — a category listing works best.</li>
+    <li>Go to any image-heavy page — a category or product listing works best.</li>
     <li>Scroll down so the lazy-loaded images actually load. The bookmarklet only sees images already in the DOM.</li>
     <li>Click the <strong>⬇ Cloudinary Savings</strong> bookmark.</li>
-    <li>Each Scene7 image gets a bright green badge with its saving, and a summary panel appears bottom-right with the page total. Badges scale to the image — small nav thumbnails get a compact percentage-only badge so they stay readable.</li>
-    <li>A green panel appears: first <em>Checking hosts…</em> while it proves Scene7, then <em>Measuring…</em>, then the result. Give it a few seconds.</li>
+    <li>Each measured image gets a bright green badge with its saving. Badges scale to the image — small nav thumbnails get a compact percentage-only badge so they stay readable.</li>
+    <li>Hit <strong>Diagnostics</strong> in the panel if anything looks wrong: it reports CSP violations, helper reachability and per-domain failure reasons.</li>
+    <li>A green panel appears listing every image domain on the page, with the significant ones already ticked. It measures those, then shows the total.</li>
+    <li>Tick or untick any domain to add or remove it — newly ticked domains are measured on demand.</li>
     <li>Open the console (<code>⌘⌥J</code> / <code>F12</code>) for the full per-image breakdown with both URLs and both content types.</li>
     <li>Use <strong>Hide overlays</strong> in the summary panel to flip between the clean page and the annotated one while presenting.</li>
   </ol>
@@ -202,40 +203,49 @@
   </p>
 </div>
 
-<h2>How it knows it's Scene7</h2>
+<h2>How it picks domains</h2>
 <div class="card">
   <p>
-    Most Scene7 customers don't serve from <code>*.scene7.com</code> — they use a vanity CNAME like
-    <code>images.retailer.com</code>, so the hostname tells you nothing. The bookmarklet scores each
-    image URL on structure instead:
+    A page's images usually come from several hosts — the product CDN, a logo, an analytics pixel,
+    a consent-banner icon. Only some of them are worth talking about. The bookmarklet groups every
+    image by host and counts how many render <strong>larger than 100&times;100</strong>, which is the
+    line between real content imagery and icons, swatches and tracking pixels.
   </p>
-  <ul>
-    <li>a <code>*.scene7.com</code> hostname</li>
-    <li>an <code>/is/image/</code> or <code>/is/content/</code> Image Serving path</li>
-    <li>Scene7 query parameters — <code>wid</code>, <code>hei</code>, <code>qlt</code>, <code>fmt</code>,
-      <code>resmode</code>, <code>op_usm</code>, <code>scl</code>, <code>defaultImage</code> and friends</li>
-    <li><code>$preset$</code> macro syntax in the query string</li>
-  </ul>
   <p>
-    Structure alone is a guess, so anything that scores highly gets <strong>proven against the live
-    server</strong> before a single number is shown. Scene7's Image Serving API answers any
-    <code>req=</code> command with a <code>#S7Z OK</code> header block in <code>text/plain</code> — a
-    signature no static CDN produces, returned even for an asset that doesn't exist:
-  </p>
-  <pre>GET https://&lt;host&gt;/is/image/&lt;co&gt;/&lt;asset&gt;?req=exists
-
-#S7Z OK
-#Wed Sep 16 11:31:57 UTC 2026
-catalogRecord.exists=1</pre>
-  <p>
-    If a deployment blocks <code>req=</code> commands, it falls back to asking whether the host actually
-    honours Scene7 resizing — <code>?wid=20</code> against <code>?wid=600</code>. A static CDN returns the
-    same bytes both times; a Scene7 server doesn't (1 KB vs 271 KB on the Asda deployment).
+    Any domain with <strong>two or more</strong> such images is ticked by default and measured.
+    Every other domain is still listed, unticked, so you can pull one in if you want it. Ticking a
+    domain measures it on demand; unticking removes it from the total and hides its badges.
   </p>
   <p style="margin-bottom:0">
-    Only hosts that pass get measured. If nothing passes you get an explicit "couldn't verify" alert
-    naming each host and why, rather than a confident number about a CDN that isn't Scene7. The
-    per-host verdicts are logged to the console either way.
+    Scene7 / Dynamic Media hosts get a <code>SCENE7</code> tag in the list. That's cosmetic labelling
+    only — it's confirmed by asking the host's Image Serving API for its <code>#S7Z</code> signature —
+    and it no longer gates anything. Scene7 sites behave exactly like every other site.
+  </p>
+</div>
+
+<h2>When something is blocked</h2>
+<div class="card">
+  <p>
+    Plenty of pages will refuse part of this, so the <strong>Diagnostics</strong> button reports what
+    happened rather than leaving you with a silent zero:
+  </p>
+  <ul>
+    <li><strong>CSP violations</strong> — captured live from the browser's
+      <code>securitypolicyviolation</code> event, with the directive and the blocked URL. This is the
+      single most useful signal when a run comes back empty.</li>
+    <li><strong>Helper reachability</strong> — whether the measuring iframe loaded at all. If
+      <code>frame-src</code> is restricted, it says so instead of timing out mysteriously.</li>
+    <li><strong>Per-domain failures</strong>, grouped by cause:
+      <em>no <code>access-control-allow-origin</code></em> (the host refuses cross-origin reads — nothing
+      client-side can fix it), <em>no <code>content-length</code></em> (chunked response, size unreadable),
+      <em>HTTP 403</em> (hotlink protection), or a Cloudinary <em>401/403</em>, which means the cloud
+      isn't allowed to fetch that domain.</li>
+  </ul>
+  <p style="margin-bottom:0">
+    Measurement itself degrades gracefully: a <code>HEAD</code> is tried first, and if the host rejects
+    it or omits <code>content-length</code>, it retries with a <code>GET</code> and cancels the body as
+    soon as the headers arrive. When a fetch fails outright, a <code>no-cors</code> probe distinguishes
+    "this host won't let us read it" from "we couldn't reach it at all".
   </p>
 </div>
 
@@ -243,7 +253,7 @@ catalogRecord.exists=1</pre>
 <div class="card">
   <p>
     George (Asda), the site this was first built for, is served behind Cloudflare with a strict
-    Content-Security-Policy — and it's a good example of what you'll hit elsewhere. Its
+    Content-Security-Policy — a good example of what you'll hit elsewhere. Its
     <code>connect-src</code> allowlist covers Asda's own domains and their analytics vendors — and nothing
     else. That means a <code>fetch()</code> fired from the page is refused for <strong>both</strong>
     <code>res.cloudinary.com</code> <em>and</em> <code>asda.scene7.com</code>, which is why the earlier version of
@@ -262,8 +272,9 @@ catalogRecord.exists=1</pre>
     ever draws DOM overlays, which CSP doesn't restrict.
   </p>
   <p style="margin-bottom:0">
-    The helper only measures hosts it has itself verified as Scene7 in that same session, and only through
-    the configured Cloudinary cloud, so framing it doesn't turn it into a general-purpose measurement proxy.
+    The helper can only read a resource's size when that server explicitly opts in with an
+    <code>access-control-allow-origin</code> header — the browser enforces that, not the helper — so
+    framing it grants no read access the framing page didn't already have.
   </p>
 </div>
 
@@ -278,6 +289,9 @@ catalogRecord.exists=1</pre>
     <li>Sizes come from <code>content-length</code> on a <code>HEAD</code> request; anything served without that
       header is skipped from the totals.</li>
     <li>Totals count each unique image URL once, even when the same image appears several times on the page.</li>
+    <li>Badges are drawn in a fixed overlay layer rather than by wrapping each image, so the page's own
+      layout is never touched. They reposition on scroll and resize.</li>
+    <li>Only <code>&lt;img&gt;</code> elements are inspected — CSS background images and <code>&lt;canvas&gt;</code> aren't.</li>
     <li>The bookmarklet depends on <code>helper.html</code> on this GitHub Pages site being reachable. If the
       helper can't be reached you'll get an explicit alert rather than silent zeroes.</li>
     <li>Cloudinary fetch mode must be allowed to pull from the customer's domain. If every Cloudinary
@@ -292,7 +306,7 @@ catalogRecord.exists=1</pre>
 </details>
 
 <footer>
-  Internal demo tool · Scene7 detection + verification · Cloudinary fetch delivery from <code>res.cloudinary.com/patrickg</code>
+  Internal demo tool · Works on any site · Cloudinary fetch delivery from <code>res.cloudinary.com/patrickg</code>
 </footer>
 
 </div>
@@ -300,104 +314,189 @@ catalogRecord.exists=1</pre>
 <script>
 // ---- The bookmarklet payload. Edited to make the savings loud and green. ----
 async function cloudinarySavings() {
-  const cloudinaryPrefix = "https://res.cloudinary.com/patrickg/image/fetch/q_auto:eco,f_auto/";
+  const CLOUD = "patrickg";
+  const TRANSFORM = "q_auto:eco,f_auto";
+  const cloudinaryPrefix = "https://res.cloudinary.com/" + CLOUD + "/image/fetch/" + TRANSFORM + "/";
   const HELPER = "https://pglithro-cloudinary.github.io/george-cloudinary-bookmarklet/helper.html";
   const HELPER_ORIGIN = "https://pglithro-cloudinary.github.io";
   const GREEN = "#00C853", GREEN_DEEP = "#00893C";
+  const THUMB = 100;   // px in either dimension; below this an image is a thumbnail
+  const MIN_BIG = 2;   // a domain needs this many non-thumbnail images to be on by default
 
-  // Scene7 Image Serving query parameters. Some are near-unique to Scene7; others
-  // (wid/hei/qlt) are suggestive but shared with other imaging CDNs, so they score less.
-  // This catches deployments that serve Scene7 from a rewritten path with no /is/image/ in it.
-  const S7_PARAMS_STRONG = ["resmode", "op_usm", "op_sharpen", "op_brightness", "op_contrast",
-    "defaultimage", "bfc", "iccembed", "printres", "scl", "cropn", "rgn", "extend"];
-  const S7_PARAMS_WEAK = ["wid", "hei", "qlt", "fmt", "sharpen", "align", "fit"];
-
-  // Score a URL for Scene7-likeness. Nothing here is conclusive on its own; the
-  // helper proves it against the live server before we measure anything.
-  function inspect(rawUrl) {
-    let u;
-    try { u = new URL(rawUrl); } catch (e) { return null; }
-    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
-
-    const host = u.host.toLowerCase();
-    const path = u.pathname.toLowerCase();
-    const query = u.search.toLowerCase();
-    const hints = [];
-    let score = 0;
-
-    if (/\.scene7\.com$/.test(host)) { score += 4; hints.push("scene7.com host"); }
-    if (path.indexOf("/is/image/") > -1 || path.indexOf("/is/content/") > -1) {
-      score += 3; hints.push("/is/ Image Serving path");
-    }
-    const strong = S7_PARAMS_STRONG.filter(p => new RegExp("[?&]" + p + "=").test(query));
-    const weak = S7_PARAMS_WEAK.filter(p => new RegExp("[?&]" + p + "=").test(query));
-    score += Math.min(strong.length * 2, 4) + Math.min(weak.length, 3);
-    if (strong.length || weak.length) {
-      hints.push(strong.concat(weak).slice(0, 4).join(",") + " params");
-    }
-    if (/[?&]\$[a-z0-9_.-]+\$/.test(query)) { score += 2; hints.push("$preset$ syntax"); }
-
-    return score >= 3 ? { url: rawUrl, host: host, score: score, hints: hints } : null;
-  }
-
-  const images = Array.from(document.images);
-  const candidates = [];
-  const byHost = {};
-  images.forEach(img => {
-    const c = img.src && inspect(img.src);
-    if (!c) return;
-    candidates.push(c);
-    if (!byHost[c.host]) byHost[c.host] = { host: c.host, sample: c.url, count: 0, hints: c.hints };
-    byHost[c.host].count++;
-  });
-  const hosts = Object.keys(byHost);
-
-  if (!hosts.length) {
-    alert("No Scene7-looking images found on this page.\n\n" +
-      "Looked at " + images.length + " images for a *.scene7.com host, an /is/image/ or " +
-      "/is/content/ path, Scene7 query parameters (wid, hei, qlt, fmt, resmode...) or $preset$ syntax.");
-    return;
-  }
-
-  // Same Accept header goes to both sides, so we compare like with like.
-  // Scene7 already negotiates AVIF, and measuring it as JPEG would overstate the win.
-  const acceptHeader = navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")
+  const accept = navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")
     ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
-  const shell = document.createElement("div");
-  Object.assign(shell.style, {
-    position: "fixed", bottom: "16px", right: "16px", zIndex: 1000000,
-    background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
-    color: "#fff", padding: "16px 18px", borderRadius: "14px",
-    border: "2px solid #ffffff", boxShadow: "0 6px 28px rgba(0,0,0,.35)",
-    fontFamily: "system-ui,-apple-system,sans-serif", minWidth: "210px", maxWidth: "280px",
-    textShadow: "0 1px 2px rgba(0,0,0,.3)"
-  });
-  const status = html => { shell.innerHTML = html; };
-  status('<div style="font-size:14px;font-weight:700;">Checking ' + hosts.length +
-    ' host' + (hosts.length === 1 ? "" : "s") + '...</div>' +
-    '<div style="font-size:11px;opacity:.9;margin-top:4px;word-break:break-all;">' +
-      hosts.slice(0, 3).join("<br>") + '</div>');
-  document.body.appendChild(shell);
+  // ---- Blocking diagnostics -------------------------------------------------
+  // Anything the page's CSP refuses fires this event, which is the single most useful
+  // signal for working out why a run came back empty.
+  const csp = [], cspSeen = {};
+  const onCsp = e => {
+    const key = e.violatedDirective + "|" + e.blockedURI;
+    if (cspSeen[key]) return;
+    cspSeen[key] = 1;
+    csp.push({ directive: e.violatedDirective, uri: String(e.blockedURI || "").slice(0, 140) });
+  };
+  document.addEventListener("securitypolicyviolation", onCsp);
 
-  // The page's CSP blocks connect-src to both Scene7 and Cloudinary, so the verifying and
-  // measuring happen inside a helper iframe on our own origin, which has its own CSP.
-  // A cross-origin frame is a separate document, so the parent's connect-src doesn't apply.
-  let frame = null, onMessage = null;
-  function talk(request, expectType, timeoutMs) {
+  // ---- Survey the page ------------------------------------------------------
+  const byUrl = new Map();     // url -> { url, host, w, h, natW, natH, els: [] }
+  Array.from(document.images).forEach(img => {
+    const src = img.currentSrc || img.src;
+    if (!src || !/^https?:/i.test(src)) return;
+    let host;
+    try { host = new URL(src).host.toLowerCase(); } catch (e) { return; }
+    const r = img.getBoundingClientRect();
+    const w = Math.round(r.width || img.width || 0);
+    const h = Math.round(r.height || img.height || 0);
+    let rec = byUrl.get(src);
+    if (!rec) {
+      rec = { url: src, host: host, w: w, h: h, natW: img.naturalWidth || 0, natH: img.naturalHeight || 0, els: [] };
+      byUrl.set(src, rec);
+    }
+    // Several elements can share a src; remember the largest rendering of it.
+    if (w * h > rec.w * rec.h) { rec.w = w; rec.h = h; }
+    rec.els.push(img);
+  });
+
+  const domains = new Map();   // host -> { host, urls: [], big, total, sample, state, results }
+  byUrl.forEach(rec => {
+    let d = domains.get(rec.host);
+    if (!d) {
+      d = { host: rec.host, urls: [], big: 0, total: 0, sample: rec.url, scene7: false,
+            state: "idle", results: null, selected: false };
+      domains.set(rec.host, d);
+    }
+    d.urls.push(rec);
+    d.total++;
+    if (rec.w >= THUMB && rec.h >= THUMB) { d.big++; if (d.big === 1) d.sample = rec.url; }
+  });
+
+  const allDomains = Array.from(domains.values()).sort((a, b) => b.big - a.big || b.total - a.total);
+  if (!allDomains.length) {
+    alert("No http(s) images found on this page.\n\nIf the page is image-heavy, it may be drawing " +
+      "them as CSS backgrounds or <canvas>, which this tool doesn't inspect.");
+    return;
+  }
+  allDomains.forEach(d => { d.selected = d.big >= MIN_BIG; });
+  if (!allDomains.some(d => d.selected)) allDomains[0].selected = true;
+
+  // ---- Overlay layer --------------------------------------------------------
+  // Badges live in one fixed layer rather than wrapping each image, so nothing in the
+  // page's own layout is disturbed. Positions are recomputed on scroll and resize.
+  const important = (el, obj) => { for (const k in obj) el.style.setProperty(k, obj[k], "important"); };
+
+  const layer = document.createElement("div");
+  important(layer, {
+    position: "fixed", left: "0", top: "0", right: "0", bottom: "0",
+    "pointer-events": "none", "z-index": "2147483646", margin: "0", padding: "0", border: "0"
+  });
+  document.documentElement.appendChild(layer);
+
+  const marks = [];     // { rec, badge, tier, ring }
+  let overlaysVisible = true;
+
+  function tierFor(w, h) {
+    if (w < 45 || h < 45) return "micro";
+    if (w < THUMB || h < THUMB) return "tiny";
+    if (w < 220 || h < 180) return "small";
+    return "full";
+  }
+
+  function badgeHtml(tier, r) {
+    const pct = ((1 - r.cld / r.orig) * 100).toFixed(1);
+    const kb = ((r.orig - r.cld) / 1000).toFixed(1);
+    if (tier === "tiny") {
+      return '<div style="font-weight:800;font-size:11px;line-height:1.1;">&#8595;' + Math.round(pct) + '%</div>';
+    }
+    if (tier === "small") {
+      return '<div style="font-weight:800;font-size:15px;line-height:1.1;">&#8595; ' + Math.round(pct) + '%</div>';
+    }
+    const fmt = (r.origType || "").replace("image/", "").split(";")[0] + " &rarr; " +
+                (r.cldType || "").replace("image/", "").split(";")[0];
+    return '<div style="font-weight:800;font-size:19px;line-height:1.1;letter-spacing:-0.5px;">&#8595; ' + pct + '%</div>' +
+      '<div style="font-size:12px;font-weight:700;margin-top:2px;">' + kb + ' KB saved</div>' +
+      '<div style="font-size:10px;opacity:.9;margin-top:1px;">' + (r.orig / 1000).toFixed(1) +
+        ' KB &rarr; ' + (r.cld / 1000).toFixed(1) + ' KB</div>' +
+      '<div style="font-size:9px;opacity:.8;margin-top:1px;">' + fmt + '</div>';
+  }
+
+  const CHROME = {
+    tiny:  { pad: "1px 4px",  bd: "1px",   rd: "5px",  ring: "2px", glow: "0 1px 4px rgba(0,0,0,.35)" },
+    small: { pad: "3px 6px",  bd: "1.5px", rd: "7px",  ring: "3px", glow: "0 2px 8px rgba(0,200,83,.55)" },
+    full:  { pad: "7px 10px", bd: "2px",   rd: "10px", ring: "3px", glow: "0 2px 14px rgba(0,200,83,.65)" }
+  };
+
+  function addMark(rec, r) {
+    rec.els.forEach(img => {
+      const box = img.getBoundingClientRect();
+      const tier = tierFor(Math.round(box.width), Math.round(box.height));
+      const prevOutline = img.style.outline, prevOffset = img.style.outlineOffset;
+      const ringPx = tier === "micro" ? "2px" : CHROME[tier].ring;
+      important(img, { outline: ringPx + " solid " + GREEN, "outline-offset": "-" + ringPx });
+
+      let badge = null;
+      if (tier !== "micro") {
+        badge = document.createElement("div");
+        badge.innerHTML = badgeHtml(tier, r);
+        important(badge, {
+          position: "absolute",
+          background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
+          color: "#fff", padding: CHROME[tier].pad, "text-align": "center",
+          "font-family": "ui-monospace,Menlo,Consolas,monospace", "font-size": "12px",
+          border: CHROME[tier].bd + " solid #ffffff", "border-radius": CHROME[tier].rd,
+          "box-shadow": CHROME[tier].glow, "pointer-events": "none",
+          "text-shadow": "0 1px 2px rgba(0,0,0,.35)", "white-space": "nowrap", margin: "0"
+        });
+        layer.appendChild(badge);
+      }
+      marks.push({ img, badge, tier, r, prevOutline, prevOffset, ringPx });
+    });
+  }
+
+  function place() {
+    for (const m of marks) {
+      const b = m.img.getBoundingClientRect();
+      const onScreen = b.width > 0 && b.height > 0 && b.bottom > -200 && b.top < innerHeight + 200;
+      if (m.badge) {
+        if (!onScreen || !overlaysVisible) { m.badge.style.setProperty("display", "none", "important"); continue; }
+        const tier = tierFor(Math.round(b.width), Math.round(b.height));
+        if (tier !== m.tier && tier !== "micro") {
+          m.tier = tier;
+          m.badge.innerHTML = badgeHtml(tier, m.r);
+          important(m.badge, { padding: CHROME[tier].pad, "border-width": CHROME[tier].bd,
+            "border-radius": CHROME[tier].rd, "box-shadow": CHROME[tier].glow });
+        }
+        const off = m.tier === "tiny" ? 2 : m.tier === "small" ? 4 : 6;
+        important(m.badge, {
+          display: "block",
+          left: Math.max(0, Math.round(b.left + off)) + "px",
+          top: Math.max(0, Math.round(b.top + off)) + "px"
+        });
+      }
+    }
+  }
+
+  let raf = 0;
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
+  addEventListener("scroll", schedule, { passive: true, capture: true });
+  addEventListener("resize", schedule, { passive: true });
+
+  // ---- Helper iframe --------------------------------------------------------
+  let frame = null, helperReady = false, helperFailed = null;
+  function talk(request, expect, timeoutMs) {
     return new Promise(resolve => {
       let settled = false;
-      const finish = v => { if (!settled) { settled = true; window.removeEventListener("message", handler); resolve(v); } };
-      function handler(ev) {
+      const finish = v => { if (!settled) { settled = true; removeEventListener("message", h); resolve(v); } };
+      function h(ev) {
         if (ev.origin !== HELPER_ORIGIN || !ev.data) return;
-        if (ev.data.type === "cld-helper-ready" && frame) frame.contentWindow.postMessage(request, HELPER_ORIGIN);
-        else if (ev.data.type === expectType) finish(ev.data.results);
+        if (ev.data.type === "cld-helper-ready") { helperReady = true; frame.contentWindow.postMessage(request, HELPER_ORIGIN); }
+        else if (ev.data.type === expect) finish(ev.data.results);
       }
-      window.addEventListener("message", handler);
+      addEventListener("message", h);
       setTimeout(() => finish(null), timeoutMs);
-      if (frame) frame.contentWindow.postMessage(request, HELPER_ORIGIN);
-      else {
+      if (frame && helperReady) frame.contentWindow.postMessage(request, HELPER_ORIGIN);
+      else if (!frame) {
         frame = document.createElement("iframe");
         frame.setAttribute("aria-hidden", "true");
         frame.style.cssText = "position:fixed;left:-9999px;top:0;width:10px;height:10px;border:0";
@@ -407,194 +506,244 @@ async function cloudinarySavings() {
     });
   }
 
-  const verdicts = await talk(
-    { type: "cld-verify", id: 1, candidates: hosts.map(h => ({ host: h, sample: byHost[h].sample })) },
-    "cld-verified", 30000);
-
-  if (!verdicts) {
-    shell.remove();
-    if (frame) frame.remove();
-    alert("Couldn't reach the measurement helper.\n\nEither the helper page is unreachable, or this " +
-      "site's CSP is blocking frame-src. Check the console for CSP violations.");
-    return;
-  }
-
-  const confirmed = verdicts.filter(v => v.confirmed).map(v => v.host);
-  console.log("Scene7 host verification:\n" + verdicts.map(v =>
-    "  " + v.host + " (" + byHost[v.host].count + " images, hints: " + byHost[v.host].hints.join(" + ") + ")\n" +
-    "    " + (v.confirmed ? "CONFIRMED - " + v.method : "not Scene7 - " + (v.error || "unknown"))
-  ).join("\n"));
-
-  if (!confirmed.length) {
-    shell.remove();
-    if (frame) frame.remove();
-    alert("Found " + candidates.length + " Scene7-looking images, but none of the hosts could be " +
-      "verified as a Scene7 image server:\n\n" +
-      verdicts.map(v => "  " + v.host + " - " + (v.error || "not Scene7")).join("\n") +
-      "\n\nNo comparison run. Details in the console.");
-    return;
-  }
-
-  const urls = Array.from(new Set(
-    candidates.filter(c => confirmed.indexOf(c.host) > -1).map(c => c.url)
-  ));
-
-  status('<div style="font-size:14px;font-weight:700;">Measuring ' + urls.length + ' images...</div>' +
-    '<div style="font-size:11px;opacity:.9;margin-top:4px;">Scene7 confirmed on ' + confirmed.length +
-    ' host' + (confirmed.length === 1 ? "" : "s") + '</div>');
-
-  const measured = await talk(
-    { type: "cld-measure", id: 2, urls: urls, prefix: cloudinaryPrefix, accept: acceptHeader },
-    "cld-results", 60000);
-  if (frame) frame.remove();
-
-  if (!measured) {
-    shell.remove();
-    alert("Verified Scene7, but the measurement round trip timed out.");
-    return;
-  }
-
-  const byUrl = {};
-  measured.forEach(r => { byUrl[r.url] = r; });
-
-  // Totals use unique URLs: the browser only downloads each one once.
-  let totalOrig = 0, totalCld = 0, counted = 0;
-  urls.forEach(u => {
-    const r = byUrl[u];
-    if (r && r.orig && r.cld) { totalOrig += r.orig; totalCld += r.cld; counted++; }
-  });
-
-  const badges = [], touched = [];
-
-  images.forEach(img => {
-    const r = byUrl[img.src];
-    if (!r || !r.orig || !r.cld) return;
-    const origSize = r.orig, cldSize = r.cld;
-    const savedKB = ((origSize - cldSize) / 1000).toFixed(1);
-    const savedPct = ((1 - cldSize / origSize) * 100).toFixed(1);
-
-    // Scale the badge to the rendered image. Nav thumbnails only get the percentage.
-    const rect = img.getBoundingClientRect();
-    const w = rect.width || img.width || 0, h = rect.height || img.height || 0;
-    const size = (w < 45 || h < 45) ? "micro"
-      : (w < 100 || h < 100) ? "tiny"
-      : (w < 220 || h < 180) ? "small" : "full";
-
-    // Colour swatches and the like are too small to carry any legible badge.
-    // They still count toward the totals; they just get the green ring.
-    if (size === "micro") {
-      const prevO = img.style.outline, prevF = img.style.outlineOffset;
-      const o = "2px solid " + GREEN;
-      img.style.outline = o;
-      img.style.outlineOffset = "-2px";
-      touched.push({ img: img, outline: o, outlineOffset: "-2px", prevOutline: prevO, prevOffset: prevF });
+  async function measureDomain(d) {
+    if (d.state === "done" || d.state === "measuring") return;
+    d.state = "measuring";
+    render();
+    const urls = d.urls.map(r => r.url);
+    const out = await talk({ type: "cld-measure", id: Date.now(), urls, prefix: cloudinaryPrefix, accept },
+      "cld-results", 90000);
+    if (!out) {
+      d.state = "failed";
+      helperFailed = helperFailed || (csp.some(c => /frame-src|child-src|default-src/.test(c.directive))
+        ? "The page's CSP blocked the helper iframe (frame-src)."
+        : "No response from the helper within 90s.");
+      render();
       return;
     }
+    d.results = new Map(out.map(r => [r.url, r]));
+    d.state = "done";
+    d.urls.forEach(rec => {
+      const r = d.results.get(rec.url);
+      if (r && r.orig && r.cld) addMark(rec, r);
+    });
+    place();
+    logDomain(d);
+    render();
+  }
 
-    const badge = document.createElement("div");
-    if (size === "tiny") {
-      badge.innerHTML =
-        '<div style="font-weight:800;font-size:11px;line-height:1.1;letter-spacing:-0.3px;">' +
-          '&#8595;' + Math.round(savedPct) + '%</div>';
-    } else if (size === "small") {
-      badge.innerHTML =
-        '<div style="font-weight:800;font-size:15px;line-height:1.1;letter-spacing:-0.4px;">' +
-          '&#8595; ' + Math.round(savedPct) + '%</div>';
+  function logDomain(d) {
+    const rows = Array.from(d.results.values());
+    const ok = rows.filter(r => r.orig && r.cld);
+    console.groupCollapsed("%c" + d.host + "%c  " + ok.length + "/" + rows.length + " measured",
+      "font-weight:700", "font-weight:400");
+    ok.forEach(r => console.log(
+      r.url + "\n  -> " + r.cldUrl +
+      "\n  " + (r.orig / 1000).toFixed(2) + " KB (" + (r.origType || "?") + ") -> " +
+      (r.cld / 1000).toFixed(2) + " KB (" + (r.cldType || "?") + ")  saved " +
+      ((1 - r.cld / r.orig) * 100).toFixed(1) + "%"));
+    rows.filter(r => !r.orig || !r.cld).forEach(r => console.warn(
+      r.url + "\n  original: " + (r.origError || "ok") + "\n  cloudinary: " + (r.cldError || "ok")));
+    console.groupEnd();
+  }
+
+  // ---- Totals ---------------------------------------------------------------
+  function totals() {
+    let orig = 0, cld = 0, n = 0;
+    allDomains.forEach(d => {
+      if (!d.selected || d.state !== "done") return;
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (r && r.orig && r.cld) { orig += r.orig; cld += r.cld; n++; }
+      });
+    });
+    return { orig, cld, n, pct: orig ? (1 - cld / orig) * 100 : 0 };
+  }
+
+  function domainStat(d) {
+    if (d.state !== "done") return null;
+    let orig = 0, cld = 0, n = 0, failed = 0;
+    d.urls.forEach(rec => {
+      const r = d.results.get(rec.url);
+      if (r && r.orig && r.cld) { orig += r.orig; cld += r.cld; n++; } else { failed++; }
+    });
+    return { orig, cld, n, failed, pct: orig ? (1 - cld / orig) * 100 : 0 };
+  }
+
+  // ---- Panel (shadow DOM so the page's CSS can't touch it) ------------------
+  const host = document.createElement("div");
+  important(host, { position: "fixed", bottom: "16px", right: "16px", "z-index": "2147483647" });
+  const root = host.attachShadow({ mode: "open" });
+  root.innerHTML =
+    '<style>' +
+    ':host,*{box-sizing:border-box}' +
+    '.p{width:330px;max-height:78vh;overflow:auto;background:linear-gradient(180deg,' + GREEN + ',' + GREEN_DEEP + ');' +
+      'color:#fff;border:2px solid #fff;border-radius:14px;box-shadow:0 6px 28px rgba(0,0,0,.4);' +
+      'font:13px/1.45 system-ui,-apple-system,sans-serif;padding:14px 16px;text-shadow:0 1px 2px rgba(0,0,0,.3)}' +
+    '.eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;opacity:.9}' +
+    '.big{font-size:36px;font-weight:800;line-height:1.05;margin:3px 0 2px}' +
+    '.sub{font-size:14px;font-weight:700}.sub2{font-size:11px;opacity:.9;margin-top:3px}' +
+    '.sec{margin-top:12px;border-top:1px solid rgba(255,255,255,.35);padding-top:9px}' +
+    '.lbl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;opacity:.85;margin-bottom:5px}' +
+    '.d{display:flex;align-items:flex-start;gap:7px;padding:4px 0;cursor:pointer}' +
+    '.d input{margin:2px 0 0;flex:none;accent-color:#fff;cursor:pointer}' +
+    '.dn{flex:1;min-width:0}' +
+    '.dh{font-size:11px;font-weight:700;word-break:break-all;line-height:1.25}' +
+    '.dm{font-size:10px;opacity:.85}' +
+    '.dv{font-size:13px;font-weight:800;flex:none;padding-left:4px}' +
+    '.tag{display:inline-block;font-size:8px;letter-spacing:.06em;background:rgba(255,255,255,.28);' +
+      'border-radius:3px;padding:1px 4px;margin-left:4px;vertical-align:1px}' +
+    'button{width:100%;margin-top:7px;background:rgba(255,255,255,.95);color:' + GREEN_DEEP + ';' +
+      'border:0;border-radius:8px;padding:7px 10px;font:700 12px system-ui,sans-serif;cursor:pointer}' +
+    'button.ghost{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5)}' +
+    '.diag{margin-top:9px;background:rgba(0,0,0,.28);border-radius:8px;padding:9px 10px;font-size:10.5px;' +
+      'line-height:1.5;word-break:break-word;text-shadow:none}' +
+    '.diag b{display:block;margin:6px 0 2px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;opacity:.9}' +
+    '.diag b:first-child{margin-top:0}' +
+    '.ok{color:#d8ffe8}.bad{color:#ffd9d9}' +
+    'code{font-family:ui-monospace,Menlo,monospace;font-size:10px;background:rgba(0,0,0,.25);padding:0 3px;border-radius:3px}' +
+    '</style><div class="p"></div>';
+  const panel = root.querySelector(".p");
+  document.documentElement.appendChild(host);
+
+  let showDiag = false;
+
+  function render() {
+    const t = totals();
+    const anyDone = allDomains.some(d => d.state === "done");
+    const busy = allDomains.some(d => d.state === "measuring");
+
+    let html = '<div class="eyebrow">' + (anyDone ? "Cloudinary would save" : "Analysing page") + '</div>';
+    if (anyDone) {
+      html += '<div class="big">' + t.pct.toFixed(1) + '%</div>' +
+        '<div class="sub">' + ((t.orig - t.cld) / 1000).toFixed(1) + ' KB across ' + t.n + ' images</div>' +
+        '<div class="sub2">' + (t.orig / 1000).toFixed(1) + ' KB &rarr; ' + (t.cld / 1000).toFixed(1) +
+        ' KB &middot; ' + TRANSFORM + '</div>';
     } else {
-      const fmt = (r.origType || "").replace("image/", "") + " &rarr; " + (r.cldType || "").replace("image/", "");
-      badge.innerHTML =
-        '<div style="font-weight:800;font-size:19px;line-height:1.1;letter-spacing:-0.5px;">&#8595; ' + savedPct + '%</div>' +
-        '<div style="font-size:12px;font-weight:700;margin-top:2px;">' + savedKB + ' KB saved</div>' +
-        '<div style="font-size:10px;opacity:.9;margin-top:1px;">' +
-          (origSize / 1000).toFixed(1) + ' KB &rarr; ' + (cldSize / 1000).toFixed(1) + ' KB</div>' +
-        '<div style="font-size:9px;opacity:.8;margin-top:1px;">' + fmt + '</div>';
+      html += '<div class="big" style="font-size:20px">' + (busy ? "Measuring&hellip;" : "&mdash;") + '</div>';
     }
 
-    const chrome = {
-      tiny:  { offset: "2px", padding: "1px 4px", border: "1px",   radius: "5px",  glow: "0 1px 4px rgba(0,0,0,.35)",     ring: "2px" },
-      small: { offset: "4px", padding: "3px 6px", border: "1.5px", radius: "7px",  glow: "0 2px 8px rgba(0,200,83,.55)",  ring: "3px" },
-      full:  { offset: "6px", padding: "7px 10px", border: "2px",  radius: "10px", glow: "0 2px 14px rgba(0,200,83,.65)", ring: "3px" }
-    }[size];
-
-    Object.assign(badge.style, {
-      position: "absolute", top: chrome.offset, left: chrome.offset,
-      background: "linear-gradient(180deg," + GREEN + "," + GREEN_DEEP + ")",
-      color: "#fff", padding: chrome.padding, textAlign: "center",
-      fontFamily: "ui-monospace,Menlo,Consolas,monospace",
-      border: chrome.border + " solid #ffffff", borderRadius: chrome.radius,
-      boxShadow: chrome.glow,
-      zIndex: 999999, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,.35)"
+    html += '<div class="sec"><div class="lbl">Domains on this page</div>';
+    allDomains.forEach((d, i) => {
+      const st = domainStat(d);
+      const note = d.state === "measuring" ? "measuring&hellip;"
+        : d.state === "failed" ? "failed"
+        : st ? st.n + " measured" + (st.failed ? ", " + st.failed + " failed" : "")
+        : d.big + " over " + THUMB + "px of " + d.total;
+      html += '<label class="d"><input type="checkbox" data-i="' + i + '"' + (d.selected ? " checked" : "") + '>' +
+        '<span class="dn"><span class="dh">' + d.host +
+          (d.scene7 ? '<span class="tag">SCENE7</span>' : "") + '</span>' +
+        '<span class="dm">' + note + '</span></span>' +
+        '<span class="dv">' + (st && st.n ? "&minus;" + st.pct.toFixed(0) + "%" : "") + '</span></label>';
     });
+    html += '</div>';
 
-    const wrapper = document.createElement("div");
-    wrapper.style.position = "relative";
-    img.parentNode.insertBefore(wrapper, img);
-    wrapper.appendChild(img);
-    wrapper.appendChild(badge);
+    html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>' +
+      '<button id="dg" class="ghost">' + (showDiag ? "Hide diagnostics" : "Diagnostics") + '</button>';
+    if (showDiag) html += diagnosticsHtml();
 
-    const prevOutline = img.style.outline, prevOffset = img.style.outlineOffset;
-    const outline = chrome.ring + " solid " + GREEN, outlineOffset = "-" + chrome.ring;
-    img.style.outline = outline;
-    img.style.outlineOffset = outlineOffset;
-
-    badges.push(badge);
-    touched.push({
-      img: img, outline: outline, outlineOffset: outlineOffset,
-      prevOutline: prevOutline, prevOffset: prevOffset
+    panel.innerHTML = html;
+    panel.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const d = allDomains[+cb.dataset.i];
+        d.selected = cb.checked;
+        if (d.selected && d.state === "idle") measureDomain(d);
+        else render();
+        applyVisibility();
+      });
     });
-  });
-
-  const log = measured.map(r => {
-    if (!r.orig || !r.cld) {
-      return "Image:\n" + r.url + "\nNot measured: " + (r.origError || "") + " / " + (r.cldError || "");
-    }
-    return "Image:\n" + r.url + "\nCloudinary URL:\n" + r.cldUrl +
-      "\nOriginal: " + (r.orig / 1000).toFixed(2) + " KB (" + (r.origType || "?") + ")" +
-      "\nCloudinary: " + (r.cld / 1000).toFixed(2) + " KB (" + (r.cldType || "?") + ")" +
-      "\nSaved: " + ((r.orig - r.cld) / 1000).toFixed(2) + " KB (" +
-      ((1 - r.cld / r.orig) * 100).toFixed(1) + "%)";
-  });
-
-  const totalOrigKB = (totalOrig / 1000).toFixed(2);
-  const totalCldKB = (totalCld / 1000).toFixed(2);
-  const totalSavedKB = (totalOrig - totalCld) / 1000;
-  const totalPct = totalOrig > 0 ? ((totalSavedKB / (totalOrig / 1000)) * 100).toFixed(1) : "0";
-
-  console.log(log.join("\n\n"));
-  console.log("\nUnique images measured: " + counted + " of " + urls.length +
-    "\nTotal Original: " + totalOrigKB + " KB\nTotal Cloudinary: " + totalCldKB +
-    " KB\nSaved: " + totalSavedKB.toFixed(2) + " KB (" + totalPct + "%)" +
-    "\nBoth sides requested with Accept: " + acceptHeader);
-
-  shell.innerHTML =
-    '<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.9;">Cloudinary would save</div>' +
-    '<div style="font-size:38px;font-weight:800;line-height:1.05;margin:4px 0 2px;">' + totalPct + '%</div>' +
-    '<div style="font-size:15px;font-weight:700;">' + totalSavedKB.toFixed(1) + ' KB across ' + counted + ' images</div>' +
-    '<div style="font-size:12px;opacity:.92;margin-top:6px;">' + totalOrigKB + ' KB &rarr; ' + totalCldKB + ' KB</div>' +
-    '<div style="font-size:10px;opacity:.8;margin-top:6px;word-break:break-all;">Scene7 verified: ' +
-      confirmed.join(", ") + '</div>' +
-    '<div style="font-size:10px;opacity:.8;margin-top:2px;">like-for-like, same Accept header</div>';
-
-  const toggle = document.createElement("button");
-  toggle.textContent = "Hide overlays";
-  Object.assign(toggle.style, {
-    marginTop: "12px", width: "100%", background: "rgba(255,255,255,.95)",
-    color: GREEN_DEEP, padding: "7px 10px", border: "none", borderRadius: "8px",
-    cursor: "pointer", fontSize: "13px", fontWeight: "700",
-    fontFamily: "system-ui,-apple-system,sans-serif"
-  });
-  shell.appendChild(toggle);
-
-  let visible = true;
-  toggle.addEventListener("click", () => {
-    visible = !visible;
-    badges.forEach(b => { b.style.display = visible ? "block" : "none"; });
-    touched.forEach(t => {
-      t.img.style.outline = visible ? t.outline : t.prevOutline;
-      t.img.style.outlineOffset = visible ? t.outlineOffset : t.prevOffset;
+    panel.querySelector("#tg").addEventListener("click", () => {
+      overlaysVisible = !overlaysVisible;
+      applyVisibility();
+      render();
     });
-    toggle.textContent = visible ? "Hide overlays" : "Show overlays";
-  });
+    panel.querySelector("#dg").addEventListener("click", () => { showDiag = !showDiag; render(); });
+  }
+
+  function applyVisibility() {
+    const on = new Set();
+    allDomains.forEach(d => { if (d.selected) d.urls.forEach(rec => on.add(rec.url)); });
+    marks.forEach(m => {
+      const src = m.img.currentSrc || m.img.src;
+      const show = overlaysVisible && on.has(src);
+      if (m.badge) m.badge.style.setProperty("display", show ? "block" : "none", "important");
+      if (show) important(m.img, { outline: m.ringPx + " solid " + GREEN, "outline-offset": "-" + m.ringPx });
+      else {
+        m.img.style.removeProperty("outline");
+        m.img.style.removeProperty("outline-offset");
+        if (m.prevOutline) m.img.style.outline = m.prevOutline;
+        if (m.prevOffset) m.img.style.outlineOffset = m.prevOffset;
+      }
+    });
+    place();
+  }
+
+  function diagnosticsHtml() {
+    let h = '<div class="diag">';
+
+    h += '<b>Helper</b>';
+    h += helperFailed ? '<span class="bad">' + helperFailed + '</span>'
+      : helperReady ? '<span class="ok">reachable &mdash; measuring runs in an iframe on ' + HELPER_ORIGIN + '</span>'
+      : 'not contacted yet';
+
+    h += '<b>Content-Security-Policy</b>';
+    if (!csp.length) h += '<span class="ok">no violations seen on this page</span>';
+    else h += csp.map(c => '<span class="bad">' + c.directive + '</span> blocked <code>' + c.uri + '</code>').join("<br>");
+
+    const problems = [];
+    allDomains.forEach(d => {
+      if (d.state !== "done") return;
+      const counts = {};
+      d.urls.forEach(rec => {
+        const r = d.results.get(rec.url);
+        if (!r) return;
+        if (!r.orig) counts["original: " + (r.origError || "unknown")] = (counts["original: " + (r.origError || "unknown")] || 0) + 1;
+        else if (!r.cld) counts["Cloudinary: " + (r.cldError || "unknown")] = (counts["Cloudinary: " + (r.cldError || "unknown")] || 0) + 1;
+      });
+      Object.keys(counts).forEach(k => problems.push(d.host + " &mdash; " + counts[k] + "x " + k));
+    });
+    h += '<b>Measurement</b>';
+    h += problems.length ? '<span class="bad">' + problems.join("<br>") + '</span>'
+      : '<span class="ok">no failures on the measured domains</span>';
+
+    h += '<b>If a domain can\'t be measured</b>' +
+      '1. <code>connect-src</code> in the CSP above blocks the page, not the helper &mdash; the helper ' +
+      'sidesteps it, so this only matters if <code>frame-src</code> is also restricted.<br>' +
+      '2. "no access-control-allow-origin" means the image host refuses cross-origin reads. Nothing ' +
+      'client-side can fix that; measure it server-side instead.<br>' +
+      '3. A Cloudinary 401/403 means this cloud isn\'t allowed to fetch that domain &mdash; check ' +
+      'Settings &gt; Security in the Cloudinary console.<br>' +
+      '4. Full per-image detail is in the browser console.';
+
+    h += '</div>';
+    return h;
+  }
+
+  // ---- Go -------------------------------------------------------------------
+  render();
+
+  // Label any Scene7 hosts, purely cosmetic, and don't let it hold up measurement.
+  const s7Candidates = allDomains.filter(d =>
+    /\.scene7\.com$/.test(d.host) || /\/is\/(image|content)\//i.test(d.sample));
+  if (s7Candidates.length) {
+    talk({ type: "cld-scene7", id: 1, samples: s7Candidates.map(d => ({ host: d.host, sample: d.sample })) },
+      "cld-scene7-result", 20000).then(res => {
+        if (!res) return;
+        res.forEach(x => { const d = domains.get(x.host); if (d && x.scene7) d.scene7 = true; });
+        render();
+      });
+  }
+
+  for (const d of allDomains) {
+    if (d.selected) await measureDomain(d);
+  }
+
+  const t = totals();
+  console.log("%cCloudinary savings%c  " + t.pct.toFixed(1) + "% across " + t.n + " images  (" +
+    (t.orig / 1000).toFixed(1) + " KB -> " + (t.cld / 1000).toFixed(1) + " KB, " + TRANSFORM + ")",
+    "font-weight:700", "font-weight:400");
+  console.log("Both sides requested with Accept: " + accept);
+  if (csp.length) console.warn("CSP violations during the run:", csp);
 }
 
 // ---- Wire it into the page ----
