@@ -213,8 +213,14 @@
   </p>
   <p>
     Any domain with <strong>two or more</strong> such images is ticked by default and measured.
-    Every other domain is still listed, unticked, so you can pull one in if you want it. Ticking a
-    domain measures it on demand; unticking removes it from the total and hides its badges.
+    A domain with just one is listed but left unticked. Ticking a domain measures it on demand;
+    unticking removes it from the total and hides its badges.
+  </p>
+  <p>
+    Domains with <strong>nothing</strong> over 100&times;100 — consent-banner icons, tracking pixels,
+    colour swatches — are moved out of the main list into <strong>Advanced</strong>, so the list stays
+    about the imagery that matters. They're still there and still tickable if you want one, and
+    anything you do tick moves back into the main list so it's obvious what's feeding the total.
   </p>
   <p style="margin-bottom:0">
     Scene7 / Dynamic Media hosts get a <code>SCENE7</code> tag in the list. That's cosmetic labelling
@@ -612,7 +618,7 @@ async function cloudinarySavings() {
   const panel = root.querySelector(".p");
   document.documentElement.appendChild(host);
 
-  let showDiag = false;
+  let showDiag = false, showAdv = false;
 
   function render() {
     const t = totals();
@@ -629,23 +635,41 @@ async function cloudinarySavings() {
       html += '<div class="big" style="font-size:20px">' + (busy ? "Measuring&hellip;" : "&mdash;") + '</div>';
     }
 
-    html += '<div class="sec"><div class="lbl">Domains on this page</div>';
-    allDomains.forEach((d, i) => {
+    const row = d => {
+      const i = allDomains.indexOf(d);
       const st = domainStat(d);
       const note = d.state === "measuring" ? "measuring&hellip;"
         : d.state === "failed" ? "failed"
         : st ? st.n + " measured" + (st.failed ? ", " + st.failed + " failed" : "")
         : d.big + " over " + THUMB + "px of " + d.total;
-      html += '<label class="d"><input type="checkbox" data-i="' + i + '"' + (d.selected ? " checked" : "") + '>' +
+      return '<label class="d"><input type="checkbox" data-i="' + i + '"' + (d.selected ? " checked" : "") + '>' +
         '<span class="dn"><span class="dh">' + d.host +
           (d.scene7 ? '<span class="tag">SCENE7</span>' : "") + '</span>' +
         '<span class="dm">' + note + '</span></span>' +
         '<span class="dv">' + (st && st.n ? "&minus;" + st.pct.toFixed(0) + "%" : "") + '</span></label>';
-    });
+    };
+
+    // Domains with nothing over the thumbnail threshold are icons, swatches and tracking
+    // pixels. They're kept out of the main list unless they've been opted into.
+    const primary = allDomains.filter(d => d.big > 0 || d.selected);
+    const minor = allDomains.filter(d => !(d.big > 0 || d.selected));
+
+    html += '<div class="sec"><div class="lbl">Domains on this page</div>';
+    html += primary.length ? primary.map(row).join("")
+      : '<div class="dm" style="padding:2px 0">nothing over ' + THUMB + 'px &mdash; see Advanced</div>';
     html += '</div>';
 
-    html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>' +
-      '<button id="dg" class="ghost">' + (showDiag ? "Hide diagnostics" : "Diagnostics") + '</button>';
+    html += '<button id="tg">' + (overlaysVisible ? "Hide overlays" : "Show overlays") + '</button>';
+    if (minor.length) {
+      html += '<button id="av" class="ghost">' + (showAdv ? "Hide advanced" : "Advanced") +
+        ' (' + minor.length + ')</button>';
+      if (showAdv) {
+        html += '<div class="sec"><div class="lbl">Nothing over ' + THUMB + 'px</div>' +
+          '<div class="dm" style="margin:-2px 0 5px">Icons, swatches and tracking pixels. Tick one to ' +
+          'measure it anyway.</div>' + minor.map(row).join("") + '</div>';
+      }
+    }
+    html += '<button id="dg" class="ghost">' + (showDiag ? "Hide diagnostics" : "Diagnostics") + '</button>';
     if (showDiag) html += diagnosticsHtml();
 
     panel.innerHTML = html;
@@ -664,6 +688,8 @@ async function cloudinarySavings() {
       render();
     });
     panel.querySelector("#dg").addEventListener("click", () => { showDiag = !showDiag; render(); });
+    const adv = panel.querySelector("#av");
+    if (adv) adv.addEventListener("click", () => { showAdv = !showAdv; render(); });
   }
 
   function applyVisibility() {

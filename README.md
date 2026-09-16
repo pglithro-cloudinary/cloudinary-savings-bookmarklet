@@ -14,8 +14,12 @@ reported with the reason.
 
 Every image is grouped by host and counted by how many render **larger than 100×100** — the line
 between content imagery and icons, swatches and tracking pixels. Any domain with **two or more**
-such images is ticked and measured by default; every other domain is listed unticked so it can be
-pulled in. Ticking measures on demand; unticking removes it from the total and hides its badges.
+such images is ticked and measured by default; a domain with one is listed but unticked. Ticking
+measures on demand; unticking removes it from the total and hides its badges.
+
+Domains with *nothing* over 100×100 — tracking pixels, consent-banner icons, colour swatches — are
+moved into an **Advanced** section rather than cluttering the main list. They stay tickable, and
+anything ticked moves back into the main list so it's clear what's feeding the total.
 
 Scene7 / Dynamic Media hosts get a `SCENE7` tag, confirmed by asking the host's Image Serving API
 for its `#S7Z` signature (`?req=exists`). That is cosmetic labelling only and gates nothing.
