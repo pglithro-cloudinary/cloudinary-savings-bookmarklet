@@ -465,16 +465,38 @@ async function cloudinarySavings() {
   // accounts for a carousel clipping its off-screen slides with overflow:hidden — something
   // a plain viewport check misses entirely.
   const markByImg = new WeakMap();
-  const io = new IntersectionObserver(entries => {
-    let changed = false;
-    entries.forEach(en => {
-      const m = markByImg.get(en.target);
-      if (!m) return;
-      const vis = en.isIntersecting && en.intersectionRatio > 0;
-      if (m.visible !== vis) { m.visible = vis; changed = true; }
-    });
-    if (changed) place();
-  }, { root: null, threshold: [0, 0.01] });
+  // Used only as a cheap "something moved" signal. It delivers nothing while the tab is hidden,
+  // so visibility itself is decided geometrically below and never depends on this firing.
+  const io = new IntersectionObserver(() => place(), { root: null, threshold: [0, 0.01] });
+
+  // Ancestors that clip their overflow — a carousel viewport, a masked panel. Cached per mark,
+  // since the chain doesn't change, and re-measured each frame because the rects do.
+  function clippersOf(el) {
+    const out = [];
+    let n = el.parentElement;
+    while (n && n !== document.body && n !== document.documentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.overflow !== "visible" || cs.overflowX !== "visible" || cs.overflowY !== "visible") out.push(n);
+      n = n.parentElement;
+    }
+    return out;
+  }
+
+  // True when the image is actually on screen: sized, inside the viewport, not scrolled out of
+  // any clipping ancestor, and not hidden by CSS.
+  function isShown(m) {
+    const r = m.img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return null;
+    for (const c of m.clippers) {
+      const b = c.getBoundingClientRect();
+      if (r.right <= b.left + 1 || r.left >= b.right - 1 ||
+          r.bottom <= b.top + 1 || r.top >= b.bottom - 1) return null;
+    }
+    if (typeof m.img.checkVisibility === "function" &&
+        !m.img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return null;
+    return r;
+  }
 
   function tierFor(w, h) {
     if (w < 45 || h < 45) return "micro";
@@ -531,7 +553,8 @@ async function cloudinarySavings() {
         });
         layer.appendChild(badge);
       }
-      const mark = { img, badge, tier, r, prevOutline, prevOffset, ringPx, enabled: true, visible: false };
+      const mark = { img, badge, tier, r, prevOutline, prevOffset, ringPx, enabled: true,
+                     clippers: clippersOf(img) };
       marks.push(mark);
       markByImg.set(img, mark);
       io.observe(img);
@@ -542,16 +565,8 @@ async function cloudinarySavings() {
   function place() {
     for (const m of marks) {
       if (!m.badge) continue;
-      if (!overlaysVisible || !m.enabled || !m.visible) {
-        m.badge.style.setProperty("display", "none", "important");
-        continue;
-      }
-      const b = m.img.getBoundingClientRect();
-      // Belt and braces: zero-sized, or hidden by CSS the observer can't see.
-      const shown = b.width > 0 && b.height > 0 &&
-        (typeof m.img.checkVisibility !== "function" ||
-         m.img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
-      if (!shown) {
+      const b = !overlaysVisible || !m.enabled ? null : isShown(m);
+      if (!b) {
         m.badge.style.setProperty("display", "none", "important");
         continue;
       }
@@ -578,7 +593,10 @@ async function cloudinarySavings() {
   // marks are measured, so this stays cheap.
   let rafId = 0, tracking = false;
   function trackFrame() { if (!tracking) return; place(); rafId = requestAnimationFrame(trackFrame); }
-  function startTracking() { if (!tracking && !document.hidden) { tracking = true; rafId = requestAnimationFrame(trackFrame); } }
+  function startTracking() {
+    place();   // position immediately, even if the tab is currently in the background
+    if (!tracking && !document.hidden) { tracking = true; rafId = requestAnimationFrame(trackFrame); }
+  }
   function stopTracking() { tracking = false; if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
   const onVisibility = () => { if (document.hidden) stopTracking(); else startTracking(); };
   document.addEventListener("visibilitychange", onVisibility);
